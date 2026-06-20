@@ -216,6 +216,8 @@
     .empty { text-align: center; color: var(--muted); padding: 20px; font-size: .9rem; }
     .footnote { text-align: center; font-size: .75rem; color: var(--muted); margin-top: 8px; }
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px); max-width: 90%; width: max-content; background: #20243a; color: #fff; padding: 13px 18px; border-radius: 14px; font-size: .9rem; line-height: 1.5; box-shadow: 0 10px 30px rgba(0,0,0,.28); opacity: 0; pointer-events: none; transition: .25s; z-index: 100; text-align: center; }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
@@ -414,6 +416,7 @@
           <input type="radio" name="voice-engine" value="gemini" style="width:auto;margin-top:3px" />
           <span><b>✨ Gemini 고품질 음성</b><br /><span style="font-size:.82rem;color:var(--muted)">더 자연스러운 음성 · <b>키 필요</b> · 들을 때마다 과금·약간의 지연 · <b>속도 조절 미지원</b></span></span>
         </label>
+        <div class="notice warn" style="font-size:.8rem;margin-top:8px">⚠️ Gemini 음성은 Google 계정에 <b>결제(billing) 설정</b>이 있어야 동작해요. <b>무료 등급은 할당량이 0</b>이라 사용할 수 없어요. (결제 설정 후엔 한 번 생성한 음성이 기기에 영구 저장돼 추가 비용이 거의 없어요.)</div>
         <div id="gemini-voice-wrap" style="margin-top:10px;display:none">
           <label for="gemini-voice-select" style="font-size:.85rem">Gemini 음성 선택</label>
           <select id="gemini-voice-select"></select>
@@ -425,6 +428,8 @@
       </div>
     </div>
   </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <!-- 보관함 모달 -->
   <div class="modal-bg" id="modal-history">
@@ -469,6 +474,18 @@
     const GEMINI_VOICES = ["Kore", "Aoede", "Leda", "Callirrhoe", "Puck", "Charon", "Fenrir"];
     const geminiAudioCache = new Map(); // L1: 메모리 캐시 (key -> Blob)
     let currentAudio = null;
+    let geminiBlocked = false; // 이번 세션에서 Gemini TTS가 막혔으면(할당량/결제) 애플 음성으로 자동 전환
+
+    /* ---------- 토스트 ---------- */
+    let _toastTimer = null;
+    function showToast(msg, ms) {
+      const t = $("toast");
+      if (!t) return;
+      t.textContent = msg;
+      t.classList.add("show");
+      if (_toastTimer) clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(() => t.classList.remove("show"), ms || 4000);
+    }
 
     /* ---------- 음성 영구 캐시 (IndexedDB, L2) ---------- */
     const IDB_NAME = "dm_tts_cache", IDB_STORE = "audio";
@@ -580,12 +597,8 @@
     // 엔진 분기 진입점
     function speak(text) {
       stopSpeak();
-      if (state.voiceEngine === "gemini") {
-        if (!state.geminiKey) {
-          // 키 없으면 애플 음성으로 폴백
-          speakApple(text);
-          return;
-        }
+      // Gemini 엔진 + 키 있음 + 이번 세션에 막히지 않았을 때만 Gemini 사용
+      if (state.voiceEngine === "gemini" && state.geminiKey && !geminiBlocked) {
         speakGemini(text);
       } else {
         speakApple(text);
@@ -683,8 +696,15 @@
             return;
           } catch (err) { lastErr = err.message || String(err); }
         }
-        // 전부 실패 → 애플 음성으로 폴백
-        alert("Gemini 음성 생성에 실패해 애플 음성으로 읽어드려요.\n(" + lastErr + ")");
+        // 전부 실패 → 애플 음성으로 폴백 (오류 한 번만 안내)
+        const isQuota = /quota|exceed|RESOURCE_EXHAUSTED|billing|limit:\s*0|rate.?limit|\b429\b/i.test(lastErr);
+        geminiBlocked = true; // 이번 세션 동안은 더 시도하지 않고 애플 음성 사용 (문장마다 실패 반복 방지)
+        if (isQuota) {
+          showToast("⚠️ Gemini 음성은 Google 결제(billing) 설정이 필요해요. 무료 등급에선 못 써요 — 애플(Yuna) 음성으로 읽어드릴게요.", 7000);
+        } else {
+          showToast("Gemini 음성 생성에 실패해 애플(Yuna) 음성으로 읽어드릴게요.", 5000);
+        }
+        renderSpeedControls(); // 애플 음성 복귀에 맞춰 속도 UI 다시 표시
         speakApple(text);
       } finally {
         setListenBusy(false);
@@ -696,7 +716,7 @@
       renderSpeedControls();
     }
     function renderSpeedControls() {
-      const gemini = state.voiceEngine === "gemini" && state.geminiKey;
+      const gemini = state.voiceEngine === "gemini" && state.geminiKey && !geminiBlocked;
       // 엔진 안내 문구
       const vf = $("voice-foot");
       if (vf) {

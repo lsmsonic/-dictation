@@ -95,15 +95,26 @@
     .row.between { justify-content: space-between; align-items: center; }
     .grow { flex: 1; }
 
-    /* Dropzone */
-    .dropzone {
-      border: 2px dashed var(--line); border-radius: var(--radius); padding: 40px 20px; text-align: center;
-      cursor: pointer; transition: .15s; background: #fbfcff;
+    /* 업로드: 촬영 / 사진첩 */
+    .upload-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .up-btn {
+      appearance: none; border: 2px solid var(--line); border-radius: var(--radius); background: #fff;
+      padding: 24px 14px; text-align: center; cursor: pointer; transition: .15s; font-family: inherit;
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
     }
-    .dropzone:hover, .dropzone.drag { border-color: var(--primary); background: var(--primary-soft); }
-    .dropzone .emoji { font-size: 2.6rem; }
-    .dropzone strong { display: block; margin-top: 8px; font-size: 1.05rem; }
-    .dropzone span { color: var(--muted); font-size: .88rem; }
+    .up-btn:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: var(--shadow); }
+    .up-btn:active { transform: translateY(0); }
+    .up-btn .ic { font-size: 2.4rem; }
+    .up-btn .t { font-family: 'Jua'; font-size: 1.2rem; color: var(--primary-dark); }
+    .up-btn .d { font-size: .8rem; color: var(--muted); }
+
+    /* Dropzone (PC 보조) */
+    .dropzone {
+      border: 1.5px dashed var(--line); border-radius: var(--radius-sm); padding: 14px; text-align: center;
+      margin-top: 12px; transition: .15s; background: #fbfcff;
+    }
+    .dropzone.drag { border-color: var(--primary); background: var(--primary-soft); }
+    .dropzone span { color: var(--muted); font-size: .82rem; }
     .preview-img { max-width: 100%; border-radius: var(--radius-sm); margin-top: 14px; border: 1px solid var(--line); }
 
     .notice { font-size: .85rem; padding: 10px 14px; border-radius: var(--radius-sm); margin-top: 12px; }
@@ -222,12 +233,23 @@
       <div class="card">
         <h2>📸 사진으로 문장 가져오기</h2>
         <p class="lead">받아쓰기 문제지나 교과서 문장을 찍으면, 띄어쓰기·문장부호까지 인식해 드려요.</p>
-        <div class="dropzone" id="dropzone">
-          <div class="emoji">🖼️</div>
-          <strong>여기를 눌러 사진 선택 / 촬영</strong>
-          <span>또는 이미지를 끌어다 놓으세요</span>
-          <input type="file" id="file-input" accept="image/*" capture="environment" class="sr-only" />
+        <div class="upload-actions">
+          <button class="up-btn" id="btn-camera" type="button">
+            <span class="ic">📷</span>
+            <span class="t">사진 촬영</span>
+            <span class="d">카메라로 바로 찍기</span>
+          </button>
+          <button class="up-btn" id="btn-library" type="button">
+            <span class="ic">🖼️</span>
+            <span class="t">사진첩에서</span>
+            <span class="d">앨범 · 파일에서 선택</span>
+          </button>
         </div>
+        <div class="dropzone" id="dropzone">
+          <span>💻 PC에서는 여기로 이미지를 끌어다 놓아도 돼요</span>
+        </div>
+        <input type="file" id="file-camera" accept="image/*" capture="environment" class="sr-only" />
+        <input type="file" id="file-library" accept="image/*" class="sr-only" />
         <img id="preview" class="preview-img" alt="" style="display:none" />
         <div class="progress-wrap" id="progress-wrap">
           <div class="progress-bar"><span id="progress-fill"></span></div>
@@ -527,15 +549,20 @@
 
     /* ---------- 이미지 → 인식 ---------- */
     const dropzone = $("dropzone");
-    const fileInput = $("file-input");
-    dropzone.addEventListener("click", () => fileInput.click());
+    const fileCamera = $("file-camera");
+    const fileLibrary = $("file-library");
+    // 촬영 / 사진첩 버튼 → 각각의 input (capture 유무로 카메라/앨범 구분)
+    $("btn-camera").addEventListener("click", () => { fileCamera.value = ""; fileCamera.click(); });
+    $("btn-library").addEventListener("click", () => { fileLibrary.value = ""; fileLibrary.click(); });
+    fileCamera.addEventListener("change", (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+    fileLibrary.addEventListener("change", (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+    // 드래그앤드롭(PC 보조)
     dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("drag"); });
     dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
     dropzone.addEventListener("drop", (e) => {
       e.preventDefault(); dropzone.classList.remove("drag");
       if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
     });
-    fileInput.addEventListener("change", (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); });
 
     function setProgress(show, pct, label) {
       $("progress-wrap").classList.toggle("show", show);

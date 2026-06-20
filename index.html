@@ -292,12 +292,14 @@
           <select id="count-select"></select>
         </div>
 
-        <div class="field">
+        <div class="field" id="speed-field">
           <label for="speed-range">🔊 읽어주는 속도 <span id="speed-val" style="color:var(--primary-dark)"></span></label>
           <input type="range" id="speed-range" min="0.5" max="1.5" step="0.05" />
           <div class="speed-presets" id="speed-presets"></div>
           <button class="btn btn-ghost" id="btn-test-speed" style="margin-top:10px">🔈 이 속도로 들어보기</button>
         </div>
+        <div class="notice info" id="speed-note" style="display:none">✨ Gemini 고품질 음성은 속도 조절을 지원하지 않아요. 속도가 필요하면 ⚙️ 설정에서 애플 기본 음성으로 바꿔 주세요.</div>
+        <div class="footnote" id="voice-foot" style="text-align:left;margin-top:6px"></div>
       </div>
 
       <div class="card">
@@ -400,6 +402,24 @@
         <button class="btn btn-line" id="key-delete">키 삭제</button>
       </div>
       <div class="notice info" style="margin-top:14px">키가 없어도 기본 OCR(Tesseract)로 무료 사용할 수 있어요. 정확도만 조금 낮아요.</div>
+
+      <hr style="border:none;border-top:1px solid var(--line);margin:20px 0" />
+      <h3 style="font-size:1.1rem">🔊 읽어주는 음성</h3>
+      <div class="field" style="margin-top:10px">
+        <label class="voice-opt" style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:pointer;margin-bottom:8px">
+          <input type="radio" name="voice-engine" value="apple" style="width:auto;margin-top:3px" />
+          <span><b>🍎 애플 기본 음성 (Yuna)</b><br /><span style="font-size:.82rem;color:var(--muted)">기기 내장 고품질 음성 · <b>속도 조절 가능</b> · 무료 · 권장</span></span>
+        </label>
+        <label class="voice-opt" style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:pointer">
+          <input type="radio" name="voice-engine" value="gemini" style="width:auto;margin-top:3px" />
+          <span><b>✨ Gemini 고품질 음성</b><br /><span style="font-size:.82rem;color:var(--muted)">더 자연스러운 음성 · <b>키 필요</b> · 들을 때마다 과금·약간의 지연 · <b>속도 조절 미지원</b></span></span>
+        </label>
+        <div id="gemini-voice-wrap" style="margin-top:10px;display:none">
+          <label for="gemini-voice-select" style="font-size:.85rem">Gemini 음성 선택</label>
+          <select id="gemini-voice-select"></select>
+          <button class="btn btn-ghost" id="btn-test-voice" style="margin-top:8px">🔈 이 음성 들어보기</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -440,7 +460,12 @@
       wrong: [],         // {q, answer, user}
       ttsRate: parseFloat(localStorage.getItem("dm_tts_rate") || "0.9"),
       geminiKey: localStorage.getItem("dm_gemini_key") || "",
+      voiceEngine: localStorage.getItem("dm_voice_engine") || "apple", // 'apple' | 'gemini'
+      geminiVoice: localStorage.getItem("dm_gemini_voice") || "Kore",
     };
+    const GEMINI_VOICES = ["Kore", "Aoede", "Leda", "Callirrhoe", "Puck", "Charon", "Fenrir"];
+    const geminiAudioCache = new Map(); // text -> Blob (반복 청취 시 재호출 방지)
+    let currentAudio = null;
 
     /* ---------- 화면 전환 ---------- */
     function goToScreen(id) {
@@ -452,29 +477,141 @@
 
     /* ---------- 음성(TTS) ---------- */
     let koVoice = null;
+    // 애플 음성 엔진(Yuna)을 우선 선택. Google 등 비(非)애플 음성은 배제.
+    function pickAppleKoreanVoice() {
+      const vs = window.speechSynthesis.getVoices();
+      const ko = vs.filter((v) => (v.lang || "").toLowerCase().startsWith("ko"));
+      if (!ko.length) return null;
+      const isApple = (v) => /apple/i.test(v.voiceURI || "") || (v.localService && !/google/i.test(v.name));
+      const apple = ko.filter(isApple);
+      const pool = apple.length ? apple : ko; // 애플 기기면 apple만 남음
+      const score = (v) => {
+        const id = (v.voiceURI || "") + " " + (v.name || "");
+        let s = 0;
+        if (/yuna/i.test(id)) s += 100;           // Yuna 최우선
+        if (/premium/i.test(id)) s += 40;          // 프리미엄(최고품질)
+        else if (/enhanced/i.test(id)) s += 30;    // 향상됨
+        if (/siri/i.test(id)) s += 15;             // Siri 음성도 고품질
+        if (/google/i.test(id)) s -= 200;          // 구글 음성 배제
+        return s;
+      };
+      return pool.slice().sort((a, b) => score(b) - score(a))[0] || null;
+    }
     function loadVoices() {
       if (!("speechSynthesis" in window)) return;
-      const vs = window.speechSynthesis.getVoices();
-      koVoice = vs.find((v) => (v.lang || "").toLowerCase().startsWith("ko")) || null;
+      koVoice = pickAppleKoreanVoice();
     }
     if ("speechSynthesis" in window) {
       loadVoices();
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
+
+    // 엔진 분기 진입점
     function speak(text) {
+      stopSpeak();
+      if (state.voiceEngine === "gemini") {
+        if (!state.geminiKey) {
+          // 키 없으면 애플 음성으로 폴백
+          speakApple(text);
+          return;
+        }
+        speakGemini(text);
+      } else {
+        speakApple(text);
+      }
+    }
+    function speakApple(text) {
       if (!("speechSynthesis" in window)) {
-        alert("이 브라우저는 음성 읽기를 지원하지 않아요. 크롬/사파리 최신 버전을 사용해 주세요.");
+        alert("이 브라우저는 음성 읽기를 지원하지 않아요. 사파리 최신 버전을 사용해 주세요.");
         return;
       }
+      if (!koVoice) loadVoices();
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "ko-KR";
       if (koVoice) u.voice = koVoice;
-      u.rate = state.ttsRate;
+      u.rate = state.ttsRate; // 애플 엔진만 속도 조절 가능
       window.speechSynthesis.speak(u);
     }
     function stopSpeak() {
       if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      if (currentAudio) { try { currentAudio.pause(); } catch (e) {} currentAudio = null; }
+    }
+
+    /* Gemini TTS (옵션) — BYOK, base64 PCM → WAV 재생, 문장별 캐싱 */
+    function setListenBusy(busy) {
+      ["study-listen", "test-listen"].forEach((id) => {
+        const b = $(id);
+        if (!b) return;
+        b.textContent = busy ? "⏳" : "🔊";
+        b.disabled = !!busy;
+      });
+    }
+    function playAudioBlob(blob) {
+      stopSpeak();
+      const url = URL.createObjectURL(blob);
+      currentAudio = new Audio(url);
+      currentAudio.onended = currentAudio.onerror = () => URL.revokeObjectURL(url);
+      currentAudio.play().catch(() => {});
+    }
+    function pcmToWav(base64, sampleRate) {
+      const bin = atob(base64);
+      const len = bin.length;
+      const buf = new ArrayBuffer(44 + len);
+      const view = new DataView(buf);
+      const wstr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+      const ch = 1, bits = 16, byteRate = sampleRate * ch * bits / 8, blockAlign = ch * bits / 8;
+      wstr(0, "RIFF"); view.setUint32(4, 36 + len, true); wstr(8, "WAVE");
+      wstr(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+      view.setUint16(22, ch, true); view.setUint32(24, sampleRate, true);
+      view.setUint32(28, byteRate, true); view.setUint16(32, blockAlign, true); view.setUint16(34, bits, true);
+      wstr(36, "data"); view.setUint32(40, len, true);
+      for (let i = 0; i < len; i++) view.setUint8(44 + i, bin.charCodeAt(i) & 0xff);
+      return new Blob([buf], { type: "audio/wav" });
+    }
+    async function speakGemini(text) {
+      if (geminiAudioCache.has(text)) { playAudioBlob(geminiAudioCache.get(text)); return; }
+      const models = ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"];
+      setListenBusy(true);
+      try {
+        let lastErr = "";
+        for (const model of models) {
+          try {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(state.geminiKey)}`;
+            const res = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: text }] }],
+                generationConfig: {
+                  responseModalities: ["AUDIO"],
+                  speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: state.geminiVoice } } },
+                },
+              }),
+            });
+            if (!res.ok) {
+              const e = await res.json().catch(() => ({}));
+              lastErr = (e.error && e.error.message) || ("HTTP " + res.status);
+              continue;
+            }
+            const data = await res.json();
+            const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+            const audio = parts.find((p) => p.inlineData && p.inlineData.data);
+            if (!audio) { lastErr = "오디오 응답 없음"; continue; }
+            const mime = audio.inlineData.mimeType || "";
+            const rate = parseInt((mime.match(/rate=(\d+)/) || [])[1] || "24000", 10);
+            const blob = pcmToWav(audio.inlineData.data, rate);
+            geminiAudioCache.set(text, blob);
+            playAudioBlob(blob);
+            return;
+          } catch (err) { lastErr = err.message || String(err); }
+        }
+        // 전부 실패 → 애플 음성으로 폴백
+        alert("Gemini 음성 생성에 실패해 애플 음성으로 읽어드려요.\n(" + lastErr + ")");
+        speakApple(text);
+      } finally {
+        setListenBusy(false);
+      }
     }
     function setRate(r) {
       state.ttsRate = Math.min(1.5, Math.max(0.5, r));
@@ -482,14 +619,29 @@
       renderSpeedControls();
     }
     function renderSpeedControls() {
+      const gemini = state.voiceEngine === "gemini" && state.geminiKey;
+      // 엔진 안내 문구
+      const vf = $("voice-foot");
+      if (vf) {
+        vf.textContent = gemini
+          ? `🔊 음성: Gemini 고품질(${state.geminiVoice}) · 속도 조절 미지원`
+          : "🔊 음성: 애플 기본(Yuna) · 속도 조절 가능";
+      }
+      // Gemini 모드: 속도 UI 숨김
+      if ($("speed-field")) $("speed-field").style.display = gemini ? "none" : "";
+      if ($("speed-note")) $("speed-note").style.display = gemini ? "" : "none";
+      if (gemini) {
+        $("study-speed").innerHTML = "";
+        $("test-speed").innerHTML = "";
+        return;
+      }
+      // 애플 모드: 속도 컨트롤 표시
       const label = (SPEED_PRESETS.find((p) => Math.abs(p.v - state.ttsRate) < 0.001) || {}).label || "";
       $("speed-val").textContent = `${state.ttsRate.toFixed(2)}x ${label ? "· " + label : ""}`;
       $("speed-range").value = state.ttsRate;
-      // setup presets
       $("speed-presets").innerHTML = SPEED_PRESETS.map((p) =>
         `<button class="chip ${Math.abs(p.v - state.ttsRate) < 0.001 ? "active" : ""}" data-rate="${p.v}">${escapeHtml(p.label)} ${p.v.toFixed(1)}x</button>`
       ).join("");
-      // mini controls (study/test)
       const mini = SPEED_PRESETS.map((p) =>
         `<button class="chip ${Math.abs(p.v - state.ttsRate) < 0.001 ? "active" : ""}" data-rate="${p.v}">${p.v.toFixed(1)}x</button>`
       ).join("");
@@ -515,8 +667,37 @@
       $("key-input").value = state.geminiKey;
       $("key-input").type = "password";
       renderKeyStatus();
+      renderVoiceEngineUI();
       openModal("modal-settings");
     });
+
+    /* 음성 엔진 선택 */
+    function renderVoiceEngineUI() {
+      document.querySelectorAll('input[name="voice-engine"]').forEach((r) => { r.checked = r.value === state.voiceEngine; });
+      const sel = $("gemini-voice-select");
+      if (!sel.options.length) {
+        sel.innerHTML = GEMINI_VOICES.map((v) => `<option value="${v}">${v}</option>`).join("");
+      }
+      sel.value = state.geminiVoice;
+      $("gemini-voice-wrap").style.display = state.voiceEngine === "gemini" ? "" : "none";
+    }
+    document.querySelectorAll('input[name="voice-engine"]').forEach((r) =>
+      r.addEventListener("change", () => {
+        state.voiceEngine = r.value;
+        localStorage.setItem("dm_voice_engine", r.value);
+        if (r.value === "gemini" && !state.geminiKey) {
+          alert("Gemini 음성을 쓰려면 위에 본인 Gemini API 키를 먼저 저장해 주세요. 키가 없으면 자동으로 애플 음성으로 읽어드려요.");
+        }
+        renderVoiceEngineUI();
+        renderSpeedControls();
+      })
+    );
+    $("gemini-voice-select").addEventListener("change", (e) => {
+      state.geminiVoice = e.target.value;
+      localStorage.setItem("dm_gemini_voice", e.target.value);
+      renderSpeedControls();
+    });
+    $("btn-test-voice").addEventListener("click", () => speak("오늘은 하늘이 참 맑고 푸르다."));
     function renderKeyStatus() {
       $("key-status").innerHTML = state.geminiKey
         ? `<div class="notice ok">✅ 키가 저장되어 있어요. 고정밀(Gemini) 인식을 사용합니다.</div>`
@@ -533,6 +714,8 @@
       if (v) localStorage.setItem("dm_gemini_key", v);
       else localStorage.removeItem("dm_gemini_key");
       renderKeyStatus();
+      renderVoiceEngineUI();
+      renderSpeedControls();
       $("key-status").innerHTML = `<div class="notice ok">저장했어요. 👍</div>`;
     });
     $("key-delete").addEventListener("click", () => {
@@ -540,6 +723,8 @@
       localStorage.removeItem("dm_gemini_key");
       $("key-input").value = "";
       renderKeyStatus();
+      renderVoiceEngineUI();
+      renderSpeedControls();
     });
     function updateEngineFoot() {
       $("engine-foot").textContent = state.geminiKey

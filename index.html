@@ -1,0 +1,923 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>받아쓰기 마스터 ✏️</title>
+  <meta name="description" content="사진 한 장으로 받아쓰기 문장을 인식해 듣고(음성 속도 조절) 학습하고 주관식으로 시험 보는 우리 가족 받아쓰기 앱." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <!-- 1차 OCR: Tesseract.js (버전 고정 + SRI 무결성 검증) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"
+          integrity="sha384-GJqSu7vueQ9qN0E9yLPb3Wtpd7OrgK8KmYzC8T1IysG1bcvxvIO4qtYR/D3A991F"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <!-- 정답 축하 효과 -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"
+          integrity="sha384-Rv68Y7adOjMMJc1/xFMcdNvXre/HF51to4GZjBALmXr7ABnVl5V4UajJwBu7zbhN"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+  <style>
+    :root {
+      --primary: #5b6cff;
+      --primary-dark: #3d49c9;
+      --primary-soft: #eef0ff;
+      --accent: #ff8a5b;
+      --ok: #16a34a;
+      --ok-soft: #e7f7ed;
+      --bad: #e23b3b;
+      --bad-soft: #fdeaea;
+      --ink: #20243a;
+      --muted: #707690;
+      --line: #e4e7f2;
+      --bg: #f5f6fc;
+      --card: #ffffff;
+      --radius: 20px;
+      --radius-sm: 12px;
+      --shadow: 0 10px 30px rgba(40, 50, 110, 0.10);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: 'Noto Sans KR', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.6;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    h1, h2, h3, .brand, .display { font-family: 'Jua', 'Noto Sans KR', sans-serif; font-weight: 400; letter-spacing: .2px; }
+
+    .app { max-width: 720px; margin: 0 auto; padding: 0 16px 48px; }
+
+    header.topbar {
+      position: sticky; top: 0; z-index: 30;
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; padding: 14px 4px; margin-bottom: 8px;
+      background: linear-gradient(var(--bg) 70%, rgba(245,246,252,0));
+    }
+    .brand { font-size: 1.4rem; color: var(--primary-dark); display: flex; align-items: center; gap: 8px; }
+    .brand small { font-family: 'Noto Sans KR'; font-size: .72rem; color: var(--muted); font-weight: 500; }
+    .topbar-actions { display: flex; gap: 8px; }
+    .icon-btn {
+      width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--line);
+      background: var(--card); font-size: 1.15rem; cursor: pointer; display: grid; place-items: center;
+      transition: .15s; box-shadow: 0 2px 6px rgba(40,50,110,.06);
+    }
+    .icon-btn:hover { border-color: var(--primary); transform: translateY(-1px); }
+
+    .screen { display: none; animation: fade .25s ease; }
+    .screen.active { display: block; }
+    @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow); margin-bottom: 16px; }
+    .card h2 { margin: 0 0 6px; font-size: 1.35rem; color: var(--primary-dark); }
+    .card p.lead { margin: 0 0 16px; color: var(--muted); font-size: .95rem; }
+
+    .btn {
+      appearance: none; border: none; border-radius: var(--radius-sm); padding: 13px 20px;
+      font-family: inherit; font-size: 1rem; font-weight: 700; cursor: pointer; transition: .15s;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-dark); }
+    .btn-ghost { background: var(--primary-soft); color: var(--primary-dark); }
+    .btn-ghost:hover { background: #e2e6ff; }
+    .btn-line { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+    .btn-line:hover { border-color: var(--primary); }
+    .btn-block { width: 100%; }
+    .btn-lg { padding: 16px 22px; font-size: 1.05rem; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    .row.between { justify-content: space-between; align-items: center; }
+    .grow { flex: 1; }
+
+    /* Dropzone */
+    .dropzone {
+      border: 2px dashed var(--line); border-radius: var(--radius); padding: 40px 20px; text-align: center;
+      cursor: pointer; transition: .15s; background: #fbfcff;
+    }
+    .dropzone:hover, .dropzone.drag { border-color: var(--primary); background: var(--primary-soft); }
+    .dropzone .emoji { font-size: 2.6rem; }
+    .dropzone strong { display: block; margin-top: 8px; font-size: 1.05rem; }
+    .dropzone span { color: var(--muted); font-size: .88rem; }
+    .preview-img { max-width: 100%; border-radius: var(--radius-sm); margin-top: 14px; border: 1px solid var(--line); }
+
+    .notice { font-size: .85rem; padding: 10px 14px; border-radius: var(--radius-sm); margin-top: 12px; }
+    .notice.info { background: var(--primary-soft); color: var(--primary-dark); }
+    .notice.warn { background: #fff7e6; color: #9a6700; }
+    .notice.ok { background: var(--ok-soft); color: var(--ok); }
+    .notice.bad { background: var(--bad-soft); color: var(--bad); }
+
+    .progress-wrap { margin-top: 16px; display: none; }
+    .progress-wrap.show { display: block; }
+    .progress-bar { height: 10px; background: var(--line); border-radius: 99px; overflow: hidden; }
+    .progress-bar > span { display: block; height: 100%; width: 0%; background: var(--primary); transition: width .25s; }
+    .progress-label { font-size: .82rem; color: var(--muted); margin-top: 6px; }
+
+    /* Sentence editor */
+    .sent-list { display: flex; flex-direction: column; gap: 10px; }
+    .sent-item { display: flex; gap: 8px; align-items: flex-start; }
+    .sent-item .num { width: 26px; height: 26px; flex-shrink: 0; border-radius: 50%; background: var(--primary-soft); color: var(--primary-dark); font-size: .8rem; font-weight: 700; display: grid; place-items: center; margin-top: 8px; }
+    .sent-item textarea {
+      flex: 1; resize: vertical; min-height: 44px; font-family: inherit; font-size: 1rem; line-height: 1.5;
+      padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); outline: none; color: var(--ink);
+    }
+    .sent-item textarea:focus { border-color: var(--primary); }
+    .sent-item button { flex-shrink: 0; width: 38px; height: 38px; margin-top: 4px; border-radius: 10px; border: 1px solid var(--line); background: #fff; cursor: pointer; font-size: 1rem; }
+    .sent-item button:hover { border-color: var(--bad); color: var(--bad); }
+
+    /* Setup */
+    .field { margin-bottom: 18px; }
+    .field > label { display: block; font-weight: 700; font-size: .95rem; margin-bottom: 8px; }
+    select, input[type="text"], input[type="password"] {
+      width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+      font-family: inherit; font-size: 1rem; outline: none; background: #fff; color: var(--ink);
+    }
+    select:focus, input:focus { border-color: var(--primary); }
+    .speed-presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .chip { padding: 8px 14px; border-radius: 99px; border: 1px solid var(--line); background: #fff; cursor: pointer; font-size: .88rem; font-weight: 600; }
+    .chip.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+    input[type="range"] { width: 100%; accent-color: var(--primary); }
+    .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 480px) { .mode-grid { grid-template-columns: 1fr; } }
+    .mode-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 16px; text-align: center; cursor: pointer; transition: .15s; background: #fff; }
+    .mode-card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: var(--shadow); }
+    .mode-card .ic { font-size: 2.2rem; }
+    .mode-card .t { font-family: 'Jua'; font-size: 1.2rem; color: var(--primary-dark); margin-top: 6px; }
+    .mode-card .d { font-size: .82rem; color: var(--muted); margin-top: 4px; }
+
+    /* Quiz / study */
+    .q-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .q-counter { font-weight: 700; color: var(--muted); }
+    .q-score { font-weight: 700; color: var(--primary-dark); }
+    .listen-box { text-align: center; padding: 26px 16px; background: linear-gradient(135deg, #eef0ff, #f6f0ff); border-radius: var(--radius); margin-bottom: 16px; }
+    .listen-box .big-listen { width: 92px; height: 92px; border-radius: 50%; border: none; background: var(--primary); color: #fff; font-size: 2.2rem; cursor: pointer; box-shadow: 0 8px 22px rgba(91,108,255,.4); transition: .15s; }
+    .listen-box .big-listen:hover { transform: scale(1.05); }
+    .listen-box .big-listen:active { transform: scale(.96); }
+    .listen-box .hint { margin-top: 12px; color: var(--muted); font-size: .9rem; }
+    .speed-mini { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    .speed-mini .chip { padding: 5px 11px; font-size: .8rem; }
+    .answer-input { width: 100%; min-height: 70px; resize: vertical; font-family: inherit; font-size: 1.15rem; line-height: 1.6; padding: 14px; border: 2px solid var(--line); border-radius: var(--radius-sm); outline: none; }
+    .answer-input:focus { border-color: var(--primary); }
+
+    .reveal { margin-top: 14px; padding: 16px; border-radius: var(--radius-sm); }
+    .reveal.ok { background: var(--ok-soft); }
+    .reveal.bad { background: var(--bad-soft); }
+    .reveal .label { font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; opacity: .7; margin-bottom: 4px; }
+    .reveal .answer-text { font-size: 1.1rem; font-weight: 700; }
+    .diff { font-size: 1.1rem; line-height: 1.9; margin-top: 6px; word-break: break-all; }
+    .d-eq { }
+    .d-del { color: var(--bad); background: var(--bad-soft); border-radius: 3px; text-decoration: underline; font-weight: 700; }
+    .d-ins { color: var(--muted); text-decoration: line-through; opacity: .7; }
+    .legend { font-size: .78rem; color: var(--muted); margin-top: 10px; }
+    .legend b { color: var(--bad); }
+
+    /* Result */
+    .score-ring { width: 140px; height: 140px; border-radius: 50%; margin: 0 auto 14px; display: grid; place-items: center; background: conic-gradient(var(--primary) var(--p,0%), var(--line) 0); }
+    .score-ring .inner { width: 112px; height: 112px; border-radius: 50%; background: #fff; display: grid; place-items: center; text-align: center; }
+    .score-ring .pct { font-family: 'Jua'; font-size: 2rem; color: var(--primary-dark); line-height: 1; }
+    .score-ring .lab { font-size: .75rem; color: var(--muted); }
+    .wrong-item { padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); margin-bottom: 10px; }
+    .wrong-item .qn { font-size: .8rem; color: var(--muted); margin-bottom: 6px; }
+
+    /* Modal */
+    .modal-bg { display: none; position: fixed; inset: 0; background: rgba(20,24,50,.5); z-index: 50; align-items: flex-end; justify-content: center; padding: 0; }
+    .modal-bg.show { display: flex; }
+    @media (min-width: 560px) { .modal-bg { align-items: center; padding: 20px; } }
+    .modal { background: #fff; width: 100%; max-width: 520px; border-radius: 22px 22px 0 0; padding: 24px; max-height: 90vh; overflow-y: auto; animation: slideup .25s ease; }
+    @media (min-width: 560px) { .modal { border-radius: 22px; } }
+    @keyframes slideup { from { transform: translateY(30px); opacity: .6; } to { transform: none; opacity: 1; } }
+    .modal h3 { margin: 0 0 4px; color: var(--primary-dark); font-size: 1.25rem; }
+    .modal .close-x { float: right; cursor: pointer; font-size: 1.4rem; color: var(--muted); line-height: 1; }
+    .help-link { display: inline-block; margin-top: 8px; color: var(--primary); font-size: .85rem; font-weight: 600; text-decoration: none; }
+    .help-link:hover { text-decoration: underline; }
+    .key-row { display: flex; gap: 8px; }
+    .key-row input { flex: 1; }
+    .hist-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); margin-bottom: 8px; cursor: pointer; }
+    .hist-item:hover { border-color: var(--primary); background: var(--primary-soft); }
+    .hist-item .meta { font-size: .78rem; color: var(--muted); }
+    .hist-item .del { padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: #fff; font-size: .8rem; cursor: pointer; }
+    .hist-item .del:hover { border-color: var(--bad); color: var(--bad); }
+    .empty { text-align: center; color: var(--muted); padding: 20px; font-size: .9rem; }
+    .footnote { text-align: center; font-size: .75rem; color: var(--muted); margin-top: 8px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">✏️ 받아쓰기 마스터 <small>우리 가족 전용</small></div>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="btn-history" title="지난 받아쓰기 보관함" aria-label="보관함">📂</button>
+        <button class="icon-btn" id="btn-settings" title="설정 (Gemini 키)" aria-label="설정">⚙️</button>
+      </div>
+    </header>
+
+    <!-- 1. 업로드 -->
+    <section class="screen active" id="screen-upload">
+      <div class="card">
+        <h2>📸 사진으로 문장 가져오기</h2>
+        <p class="lead">받아쓰기 문제지나 교과서 문장을 찍으면, 띄어쓰기·문장부호까지 인식해 드려요.</p>
+        <div class="dropzone" id="dropzone">
+          <div class="emoji">🖼️</div>
+          <strong>여기를 눌러 사진 선택 / 촬영</strong>
+          <span>또는 이미지를 끌어다 놓으세요</span>
+          <input type="file" id="file-input" accept="image/*" capture="environment" class="sr-only" />
+        </div>
+        <img id="preview" class="preview-img" alt="" style="display:none" />
+        <div class="progress-wrap" id="progress-wrap">
+          <div class="progress-bar"><span id="progress-fill"></span></div>
+          <div class="progress-label" id="progress-label">준비 중…</div>
+        </div>
+        <div id="upload-notice"></div>
+        <div class="row" style="margin-top:16px">
+          <button class="btn btn-line grow" id="btn-sample">예시 문장으로 체험</button>
+        </div>
+        <div class="footnote" id="engine-foot"></div>
+      </div>
+    </section>
+
+    <!-- 2. 검수/편집 -->
+    <section class="screen" id="screen-verify">
+      <div class="card">
+        <h2>✍️ 문장 확인 & 수정</h2>
+        <p class="lead">받아쓰기 정답이 되는 문장이에요. <b>띄어쓰기·문장부호</b>가 정확한지 확인하고 고쳐 주세요.</p>
+        <div class="sent-list" id="sent-list"></div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn btn-line" id="btn-add-sent">➕ 문장 추가</button>
+          <button class="btn btn-line" id="btn-clear-sent">전체 지우기</button>
+        </div>
+        <div class="notice info" style="margin-top:14px">💡 인식이 부정확하면 ⚙️ 설정에서 본인 <b>Gemini API 키</b>를 넣으면 정확도가 크게 좋아져요.</div>
+      </div>
+      <div class="row between">
+        <button class="btn btn-line" id="btn-back-upload">← 다시 찍기</button>
+        <button class="btn btn-primary" id="btn-to-setup">학습/시험 설정 →</button>
+      </div>
+    </section>
+
+    <!-- 3. 설정 -->
+    <section class="screen" id="screen-setup">
+      <div class="card">
+        <h2>🎯 학습 설정</h2>
+        <p class="lead">문항 수와 읽어주는 속도를 정하고, 모드를 선택하세요.</p>
+
+        <div class="field">
+          <label for="count-select">문항 수</label>
+          <select id="count-select"></select>
+        </div>
+
+        <div class="field">
+          <label for="speed-range">🔊 읽어주는 속도 <span id="speed-val" style="color:var(--primary-dark)"></span></label>
+          <input type="range" id="speed-range" min="0.5" max="1.5" step="0.05" />
+          <div class="speed-presets" id="speed-presets"></div>
+          <button class="btn btn-ghost" id="btn-test-speed" style="margin-top:10px">🔈 이 속도로 들어보기</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-top:0;color:var(--primary-dark)">모드 선택</h3>
+        <div class="mode-grid">
+          <div class="mode-card" id="mode-study">
+            <div class="ic">📖</div>
+            <div class="t">학습 모드</div>
+            <div class="d">듣고 따라 쓰며 정답 바로 확인</div>
+          </div>
+          <div class="mode-card" id="mode-test">
+            <div class="ic">📝</div>
+            <div class="t">시험 모드</div>
+            <div class="d">주관식 · 문장부호까지 정확히</div>
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-line" id="btn-back-verify">← 문장 수정으로</button>
+    </section>
+
+    <!-- 4. 학습 -->
+    <section class="screen" id="screen-study">
+      <div class="card">
+        <div class="q-head">
+          <span class="q-counter" id="study-counter"></span>
+          <button class="btn btn-line" id="study-quit" style="padding:6px 12px;font-size:.85rem">나가기</button>
+        </div>
+        <div class="listen-box">
+          <button class="big-listen" id="study-listen" aria-label="문장 듣기">🔊</button>
+          <div class="hint">버튼을 눌러 문장을 듣고, 아래에 받아써 보세요.</div>
+          <div class="speed-mini" id="study-speed"></div>
+        </div>
+        <textarea class="answer-input" id="study-answer" placeholder="여기에 받아쓰기…" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+        <div class="row" style="margin-top:12px">
+          <button class="btn btn-primary grow" id="study-check">확인하기</button>
+          <button class="btn btn-line" id="study-reveal">정답 보기</button>
+        </div>
+        <div id="study-result"></div>
+        <div class="row between" style="margin-top:14px">
+          <button class="btn btn-line" id="study-prev">← 이전</button>
+          <button class="btn btn-ghost" id="study-next">다음 →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. 시험 -->
+    <section class="screen" id="screen-test">
+      <div class="card">
+        <div class="q-head">
+          <span class="q-counter" id="test-counter"></span>
+          <button class="btn btn-line" id="test-quit" style="padding:6px 12px;font-size:.85rem">나가기</button>
+        </div>
+        <div class="listen-box">
+          <button class="big-listen" id="test-listen" aria-label="문장 듣기">🔊</button>
+          <div class="hint">문장을 듣고 <b>띄어쓰기·문장부호까지 똑같이</b> 받아쓰세요.</div>
+          <div class="speed-mini" id="test-speed"></div>
+        </div>
+        <textarea class="answer-input" id="test-answer" placeholder="들은 문장을 그대로 받아쓰기…" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+        <button class="btn btn-primary btn-block btn-lg" id="test-submit" style="margin-top:12px">제출 →</button>
+      </div>
+    </section>
+
+    <!-- 6. 결과 -->
+    <section class="screen" id="screen-result">
+      <div class="card" style="text-align:center">
+        <h2>🎉 시험 결과</h2>
+        <div class="score-ring" id="score-ring"><div class="inner"><div><div class="pct" id="result-pct">0%</div><div class="lab">정답률</div></div></div></div>
+        <p class="lead" id="result-summary" style="text-align:center"></p>
+      </div>
+      <div class="card" id="wrong-card">
+        <h3 style="margin-top:0;color:var(--bad)">📌 틀린 문장 다시 보기</h3>
+        <div id="wrong-list"></div>
+        <div class="legend">표시: <b>빨강 밑줄</b> = 빠뜨리거나 틀린 글자, <span class="d-ins">취소선</span> = 잘못 더 쓴 글자, <code>␣</code> = 띄어쓰기</div>
+      </div>
+      <div class="row">
+        <button class="btn btn-ghost grow" id="result-retry-wrong">틀린 문장만 다시</button>
+        <button class="btn btn-line grow" id="result-retry-all">같은 문장 다시 시험</button>
+      </div>
+      <button class="btn btn-primary btn-block" id="result-home" style="margin-top:10px">처음으로</button>
+    </section>
+  </div>
+
+  <!-- 설정 모달 -->
+  <div class="modal-bg" id="modal-settings">
+    <div class="modal">
+      <span class="close-x" data-close="modal-settings">×</span>
+      <h3>⚙️ 설정 · Gemini API 키</h3>
+      <p class="lead" style="color:var(--muted);font-size:.9rem">키를 넣으면 기울어진 사진·복잡한 문장도 <b>띄어쓰기·문장부호까지 거의 정확히</b> 인식해요. 키는 <b>이 기기에만</b> 저장되며 우리 서버로 전송되지 않아요. (선택사항)</p>
+      <div class="field">
+        <label for="key-input">본인 Gemini API Key</label>
+        <div class="key-row">
+          <input type="password" id="key-input" placeholder="AIza..." autocomplete="off" />
+          <button class="btn btn-line" id="key-toggle" title="보기/숨기기">👁️</button>
+        </div>
+        <a class="help-link" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">→ Google AI Studio에서 무료 키 발급받기</a>
+      </div>
+      <div id="key-status"></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn btn-primary grow" id="key-save">저장</button>
+        <button class="btn btn-line" id="key-delete">키 삭제</button>
+      </div>
+      <div class="notice info" style="margin-top:14px">키가 없어도 기본 OCR(Tesseract)로 무료 사용할 수 있어요. 정확도만 조금 낮아요.</div>
+    </div>
+  </div>
+
+  <!-- 보관함 모달 -->
+  <div class="modal-bg" id="modal-history">
+    <div class="modal">
+      <span class="close-x" data-close="modal-history">×</span>
+      <h3>📂 지난 받아쓰기 보관함</h3>
+      <p class="lead" style="color:var(--muted);font-size:.9rem">저장해 둔 문장 묶음을 다시 학습·시험할 수 있어요.</p>
+      <div id="history-list"></div>
+    </div>
+  </div>
+
+  <script>
+  "use strict";
+  (function () {
+    /* ---------- 유틸 ---------- */
+    const $ = (id) => document.getElementById(id);
+    function escapeHtml(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+        { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+      ));
+    }
+    const SPEED_PRESETS = [
+      { v: 0.6, label: "또박또박" },
+      { v: 0.8, label: "느리게" },
+      { v: 1.0, label: "보통" },
+      { v: 1.2, label: "빠르게" },
+    ];
+
+    /* ---------- 상태 ---------- */
+    const state = {
+      sentences: [],     // 검수 완료 문장(정답) 배열
+      session: [],       // 현재 학습/시험 대상
+      idx: 0,
+      mode: null,        // 'study' | 'test'
+      score: 0,
+      wrong: [],         // {q, answer, user}
+      ttsRate: parseFloat(localStorage.getItem("dm_tts_rate") || "0.9"),
+      geminiKey: localStorage.getItem("dm_gemini_key") || "",
+    };
+
+    /* ---------- 화면 전환 ---------- */
+    function goToScreen(id) {
+      stopSpeak();
+      document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
+      $(id).classList.add("active");
+      window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
+    }
+
+    /* ---------- 음성(TTS) ---------- */
+    let koVoice = null;
+    function loadVoices() {
+      if (!("speechSynthesis" in window)) return;
+      const vs = window.speechSynthesis.getVoices();
+      koVoice = vs.find((v) => (v.lang || "").toLowerCase().startsWith("ko")) || null;
+    }
+    if ("speechSynthesis" in window) {
+      loadVoices();
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+    function speak(text) {
+      if (!("speechSynthesis" in window)) {
+        alert("이 브라우저는 음성 읽기를 지원하지 않아요. 크롬/사파리 최신 버전을 사용해 주세요.");
+        return;
+      }
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "ko-KR";
+      if (koVoice) u.voice = koVoice;
+      u.rate = state.ttsRate;
+      window.speechSynthesis.speak(u);
+    }
+    function stopSpeak() {
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    }
+    function setRate(r) {
+      state.ttsRate = Math.min(1.5, Math.max(0.5, r));
+      localStorage.setItem("dm_tts_rate", String(state.ttsRate));
+      renderSpeedControls();
+    }
+    function renderSpeedControls() {
+      const label = (SPEED_PRESETS.find((p) => Math.abs(p.v - state.ttsRate) < 0.001) || {}).label || "";
+      $("speed-val").textContent = `${state.ttsRate.toFixed(2)}x ${label ? "· " + label : ""}`;
+      $("speed-range").value = state.ttsRate;
+      // setup presets
+      $("speed-presets").innerHTML = SPEED_PRESETS.map((p) =>
+        `<button class="chip ${Math.abs(p.v - state.ttsRate) < 0.001 ? "active" : ""}" data-rate="${p.v}">${escapeHtml(p.label)} ${p.v.toFixed(1)}x</button>`
+      ).join("");
+      // mini controls (study/test)
+      const mini = SPEED_PRESETS.map((p) =>
+        `<button class="chip ${Math.abs(p.v - state.ttsRate) < 0.001 ? "active" : ""}" data-rate="${p.v}">${p.v.toFixed(1)}x</button>`
+      ).join("");
+      $("study-speed").innerHTML = `<span style="font-size:.8rem;color:var(--muted)">속도</span>` + mini;
+      $("test-speed").innerHTML = `<span style="font-size:.8rem;color:var(--muted)">속도</span>` + mini;
+    }
+    // delegate preset clicks
+    document.addEventListener("click", (e) => {
+      const chip = e.target.closest(".chip[data-rate]");
+      if (chip) setRate(parseFloat(chip.dataset.rate));
+    });
+
+    /* ---------- 설정(키) 모달 ---------- */
+    function openModal(id) { $(id).classList.add("show"); }
+    function closeModal(id) { $(id).classList.remove("show"); }
+    document.querySelectorAll("[data-close]").forEach((el) =>
+      el.addEventListener("click", () => closeModal(el.dataset.close))
+    );
+    document.querySelectorAll(".modal-bg").forEach((bg) =>
+      bg.addEventListener("click", (e) => { if (e.target === bg) closeModal(bg.id); })
+    );
+    $("btn-settings").addEventListener("click", () => {
+      $("key-input").value = state.geminiKey;
+      $("key-input").type = "password";
+      renderKeyStatus();
+      openModal("modal-settings");
+    });
+    function renderKeyStatus() {
+      $("key-status").innerHTML = state.geminiKey
+        ? `<div class="notice ok">✅ 키가 저장되어 있어요. 고정밀(Gemini) 인식을 사용합니다.</div>`
+        : `<div class="notice info">키 미저장 — 기본 OCR(Tesseract)을 사용해요.</div>`;
+      updateEngineFoot();
+    }
+    $("key-toggle").addEventListener("click", () => {
+      const i = $("key-input");
+      i.type = i.type === "password" ? "text" : "password";
+    });
+    $("key-save").addEventListener("click", () => {
+      const v = $("key-input").value.trim();
+      state.geminiKey = v;
+      if (v) localStorage.setItem("dm_gemini_key", v);
+      else localStorage.removeItem("dm_gemini_key");
+      renderKeyStatus();
+      $("key-status").innerHTML = `<div class="notice ok">저장했어요. 👍</div>`;
+    });
+    $("key-delete").addEventListener("click", () => {
+      state.geminiKey = "";
+      localStorage.removeItem("dm_gemini_key");
+      $("key-input").value = "";
+      renderKeyStatus();
+    });
+    function updateEngineFoot() {
+      $("engine-foot").textContent = state.geminiKey
+        ? "현재 인식 엔진: 고정밀 Gemini (본인 키) · 실패 시 기본 OCR로 자동 전환"
+        : "현재 인식 엔진: 기본 OCR(Tesseract) · 무료, 키 불필요";
+    }
+
+    /* ---------- 이미지 → 인식 ---------- */
+    const dropzone = $("dropzone");
+    const fileInput = $("file-input");
+    dropzone.addEventListener("click", () => fileInput.click());
+    dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("drag"); });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("drag"));
+    dropzone.addEventListener("drop", (e) => {
+      e.preventDefault(); dropzone.classList.remove("drag");
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener("change", (e) => { if (e.target.files[0]) handleFile(e.target.files[0]); });
+
+    function setProgress(show, pct, label) {
+      $("progress-wrap").classList.toggle("show", show);
+      if (pct != null) $("progress-fill").style.width = Math.round(pct * 100) + "%";
+      if (label != null) $("progress-label").textContent = label;
+    }
+    function uploadNotice(html) { $("upload-notice").innerHTML = html || ""; }
+
+    function compressImage(file) {
+      return new Promise((resolve, reject) => {
+        if (!file.type.startsWith("image/")) { reject(new Error("이미지 파일이 아니에요.")); return; }
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+          const MAX = 1600;
+          let w = img.naturalWidth, h = img.naturalHeight;
+          const scale = Math.min(1, MAX / Math.max(w, h));
+          w = Math.round(w * scale); h = Math.round(h * scale);
+          const c = document.createElement("canvas");
+          c.width = w; c.height = h;
+          c.getContext("2d").drawImage(img, 0, 0, w, h);
+          URL.revokeObjectURL(url);
+          const dataUrl = c.toDataURL("image/jpeg", 0.85);
+          resolve({ dataUrl, base64: dataUrl.split(",")[1], mime: "image/jpeg" });
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("이미지를 불러오지 못했어요.")); };
+        img.src = url;
+      });
+    }
+
+    async function handleFile(file) {
+      uploadNotice("");
+      let img;
+      try { img = await compressImage(file); }
+      catch (err) { uploadNotice(`<div class="notice bad">${escapeHtml(err.message)}</div>`); return; }
+      $("preview").src = img.dataUrl;
+      $("preview").style.display = "block";
+
+      let sentences = [];
+      // 1) 키가 있으면 고정밀(Gemini) 우선, 실패 시 Tesseract 폴백
+      if (state.geminiKey) {
+        try {
+          setProgress(true, 0.3, "고정밀(Gemini)으로 분석 중…");
+          sentences = await runGemini(img.base64, img.mime);
+          setProgress(true, 1, "완료!");
+        } catch (err) {
+          uploadNotice(`<div class="notice warn">Gemini 분석 실패(${escapeHtml(err.message)}) → 기본 OCR로 전환합니다.</div>`);
+          sentences = await runTesseractFlow(file);
+        }
+      } else {
+        sentences = await runTesseractFlow(file);
+      }
+
+      setProgress(false);
+      if (!sentences.length) {
+        uploadNotice(`<div class="notice bad">문장을 찾지 못했어요. 더 또렷한 사진으로 다시 시도하거나, ⚙️ 설정에서 Gemini 키를 넣어 보세요.</div>`);
+        return;
+      }
+      state.sentences = sentences;
+      renderSentenceEditor();
+      goToScreen("screen-verify");
+    }
+
+    async function runTesseractFlow(file) {
+      try {
+        setProgress(true, 0.05, "기본 OCR 엔진 준비 중…");
+        const { data } = await Tesseract.recognize(file, "kor", {
+          logger: (m) => {
+            if (m.status && m.progress != null) {
+              const ko = { "loading tesseract core": "엔진 로딩", "initializing tesseract": "초기화", "loading language traineddata": "한국어 데이터 받는 중", "initializing api": "준비 중", "recognizing text": "문장 인식 중" }[m.status] || m.status;
+              setProgress(true, m.progress, `${ko}… ${Math.round(m.progress * 100)}%`);
+            }
+          },
+        });
+        if (data.confidence != null && data.confidence < 65 && !state.geminiKey) {
+          uploadNotice(`<div class="notice warn">인식 신뢰도가 낮아요(${Math.round(data.confidence)}%). 정확도를 높이려면 ⚙️ 설정에서 Gemini 키를 넣어 보세요.</div>`);
+        }
+        return parseSentences(data.text);
+      } catch (err) {
+        uploadNotice(`<div class="notice bad">기본 OCR 실패: ${escapeHtml(err.message)}</div>`);
+        return [];
+      }
+    }
+
+    function parseSentences(text) {
+      return String(text || "")
+        .split(/\n+/)
+        .map((s) => s.replace(/\s+$/g, "").replace(/^\s+/g, ""))
+        .filter((s) => s.length > 0);
+    }
+
+    async function runGemini(base64, mime) {
+      const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+      const prompt =
+        "이 이미지는 한국어 받아쓰기 문제 또는 교과서 문장입니다. 사진 속 문장을 한 문장씩 추출하세요. " +
+        "규칙: (1) 띄어쓰기와 문장부호(마침표, 쉼표, 물음표, 느낌표, 따옴표, 가운뎃점 등)를 사진에 보이는 그대로 정확히 보존하세요. " +
+        "(2) 글자를 임의로 고치거나 맞춤법을 교정하지 말고 보이는 그대로 옮기세요. (3) 번호나 보기 기호는 제외하고 문장 본문만 담으세요. " +
+        '오직 유효한 JSON 문자열 배열로만 출력하세요. 예시: ["오늘은 날씨가 참 맑다.", "너는 어디에 가니?"] 마크다운 코드펜스로 감싸지 마세요.';
+      let lastErr = "";
+      for (const model of models) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(state.geminiKey)}`;
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: mime, data: base64 } }] }],
+              generationConfig: { temperature: 0 },
+            }),
+          });
+          if (!res.ok) {
+            const e = await res.json().catch(() => ({}));
+            lastErr = (e.error && e.error.message) || ("HTTP " + res.status);
+            continue;
+          }
+          const data = await res.json();
+          let t = data.candidates && data.candidates[0] && data.candidates[0].content &&
+                  data.candidates[0].content.parts && data.candidates[0].content.parts[0] &&
+                  data.candidates[0].content.parts[0].text;
+          if (!t) { lastErr = "빈 응답"; continue; }
+          t = t.trim();
+          if (t.startsWith("```")) t = t.replace(/^```[a-zA-Z]*/, "").replace(/```$/, "").trim();
+          const a = t.indexOf("["), b = t.lastIndexOf("]");
+          if (a !== -1 && b > a) t = t.substring(a, b + 1);
+          t = t.replace(/,\s*([\]}])/g, "$1");
+          const arr = JSON.parse(t);
+          if (Array.isArray(arr)) return arr.map((x) => String(x).trim()).filter(Boolean);
+          lastErr = "배열 아님";
+        } catch (err) { lastErr = err.message || String(err); }
+      }
+      throw new Error(lastErr || "알 수 없는 오류");
+    }
+
+    $("btn-sample").addEventListener("click", () => {
+      state.sentences = [
+        "오늘은 하늘이 참 맑고 푸르다.",
+        "너는 내일 무엇을 할 거니?",
+        "와, 정말 멋진 그림이구나!",
+        "친구와 함께 도서관에 가서 책을 읽었다.",
+        "엄마께서 \"숙제를 다 했니?\"라고 물으셨다.",
+      ];
+      renderSentenceEditor();
+      goToScreen("screen-verify");
+    });
+
+    /* ---------- 검수/편집 ---------- */
+    function renderSentenceEditor() {
+      const list = $("sent-list");
+      list.innerHTML = state.sentences.map((s, i) => `
+        <div class="sent-item">
+          <div class="num">${i + 1}</div>
+          <textarea data-i="${i}" rows="1">${escapeHtml(s)}</textarea>
+          <button data-del="${i}" title="삭제">🗑️</button>
+        </div>`).join("");
+      list.querySelectorAll("textarea").forEach((ta) => {
+        autoGrow(ta);
+        ta.addEventListener("input", (e) => {
+          state.sentences[+e.target.dataset.i] = e.target.value;
+          autoGrow(e.target);
+        });
+      });
+      list.querySelectorAll("button[data-del]").forEach((b) =>
+        b.addEventListener("click", () => {
+          state.sentences.splice(+b.dataset.del, 1);
+          renderSentenceEditor();
+        })
+      );
+    }
+    function autoGrow(ta) { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; }
+    $("btn-add-sent").addEventListener("click", () => { state.sentences.push(""); renderSentenceEditor(); });
+    $("btn-clear-sent").addEventListener("click", () => {
+      if (confirm("문장을 모두 지울까요?")) { state.sentences = []; renderSentenceEditor(); }
+    });
+    $("btn-back-upload").addEventListener("click", () => goToScreen("screen-upload"));
+    $("btn-back-verify").addEventListener("click", () => goToScreen("screen-verify"));
+
+    $("btn-to-setup").addEventListener("click", () => {
+      const clean = state.sentences.map((s) => s.trim()).filter(Boolean);
+      if (clean.length === 0) { alert("문장이 하나도 없어요. 한 문장 이상 입력해 주세요."); return; }
+      state.sentences = clean;
+      saveCurrentToHistory();
+      setupCountOptions();
+      goToScreen("screen-setup");
+    });
+
+    /* ---------- 설정 화면 ---------- */
+    function setupCountOptions() {
+      const total = state.sentences.length;
+      const opts = [5, 10, 20].filter((n) => n < total);
+      opts.push(total);
+      $("count-select").innerHTML = opts.map((n) =>
+        n === total ? `<option value="${n}">전체 (${n}문장)</option>` : `<option value="${n}">${n}문장</option>`
+      ).join("");
+    }
+    $("speed-range").addEventListener("input", (e) => setRate(parseFloat(e.target.value)));
+    $("btn-test-speed").addEventListener("click", () => speak("오늘은 하늘이 참 맑고 푸르다."));
+
+    function shuffle(arr) {
+      const a = arr.slice();
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor((window.crypto ? window.crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32 : Math.random()) * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+    function buildSession() {
+      const n = parseInt($("count-select").value, 10);
+      state.session = shuffle(state.sentences).slice(0, n);
+      state.idx = 0; state.score = 0; state.wrong = [];
+    }
+    $("mode-study").addEventListener("click", () => { state.mode = "study"; buildSession(); startStudy(); });
+    $("mode-test").addEventListener("click", () => { state.mode = "test"; buildSession(); startTest(); });
+
+    /* ---------- 정답 비교 + diff ---------- */
+    function normalize(s) { return String(s).trim(); } // 앞뒤 공백만 정규화 (내부 공백·부호는 보존)
+    function isExact(user, answer) { return normalize(user) === normalize(answer); }
+
+    function diffHtml(answer, user) {
+      const a = Array.from(normalize(answer));
+      const b = Array.from(normalize(user));
+      const n = a.length, m = b.length;
+      const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+      for (let i = 1; i <= n; i++)
+        for (let j = 1; j <= m; j++)
+          dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+      let i = n, j = m; const ops = [];
+      while (i > 0 && j > 0) {
+        if (a[i - 1] === b[j - 1]) { ops.push(["eq", a[i - 1]]); i--; j--; }
+        else if (dp[i - 1][j] >= dp[i][j - 1]) { ops.push(["del", a[i - 1]]); i--; }
+        else { ops.push(["ins", b[j - 1]]); j--; }
+      }
+      while (i > 0) { ops.push(["del", a[i - 1]]); i--; }
+      while (j > 0) { ops.push(["ins", b[j - 1]]); j--; }
+      ops.reverse();
+      return ops.map(([t, c]) => {
+        const show = c === " " ? "␣" : escapeHtml(c);
+        if (t === "eq") return `<span class="d-eq">${escapeHtml(c)}</span>`;
+        if (t === "del") return `<span class="d-del">${show}</span>`;
+        return `<span class="d-ins">${show}</span>`;
+      }).join("");
+    }
+
+    /* ---------- 학습 모드 ---------- */
+    function startStudy() { state.idx = 0; renderStudy(); goToScreen("screen-study"); }
+    function renderStudy() {
+      const cur = state.session[state.idx];
+      $("study-counter").textContent = `${state.idx + 1} / ${state.session.length}`;
+      $("study-answer").value = "";
+      $("study-result").innerHTML = "";
+      $("study-prev").disabled = state.idx === 0;
+      renderSpeedControls();
+      setTimeout(() => speak(cur), 250);
+      $("study-answer").focus();
+    }
+    $("study-listen").addEventListener("click", () => speak(state.session[state.idx]));
+    $("study-check").addEventListener("click", () => {
+      const cur = state.session[state.idx];
+      const user = $("study-answer").value;
+      const ok = isExact(user, cur);
+      $("study-result").innerHTML = ok
+        ? `<div class="reveal ok"><div class="label">정답! 🎉</div><div class="answer-text">${escapeHtml(cur)}</div></div>`
+        : `<div class="reveal bad"><div class="label">아쉬워요 — 정답과 비교</div><div class="diff">${diffHtml(cur, user)}</div><div style="margin-top:8px"><span class="label">정답</span><div class="answer-text">${escapeHtml(cur)}</div></div></div>`;
+      if (ok) confettiBurst();
+    });
+    $("study-reveal").addEventListener("click", () => {
+      const cur = state.session[state.idx];
+      $("study-result").innerHTML = `<div class="reveal ok"><div class="label">정답</div><div class="answer-text">${escapeHtml(cur)}</div></div>`;
+      speak(cur);
+    });
+    $("study-next").addEventListener("click", () => {
+      if (state.idx < state.session.length - 1) { state.idx++; renderStudy(); }
+      else { alert("학습을 모두 마쳤어요! 👏"); goToScreen("screen-setup"); }
+    });
+    $("study-prev").addEventListener("click", () => { if (state.idx > 0) { state.idx--; renderStudy(); } });
+    $("study-quit").addEventListener("click", () => { if (confirm("학습을 끝낼까요?")) goToScreen("screen-setup"); });
+
+    /* ---------- 시험 모드 (주관식) ---------- */
+    function startTest() { state.idx = 0; state.score = 0; state.wrong = []; renderTest(); goToScreen("screen-test"); }
+    function renderTest() {
+      const cur = state.session[state.idx];
+      $("test-counter").textContent = `${state.idx + 1} / ${state.session.length}`;
+      $("test-answer").value = "";
+      renderSpeedControls();
+      setTimeout(() => speak(cur), 250);
+      $("test-answer").focus();
+    }
+    $("test-listen").addEventListener("click", () => speak(state.session[state.idx]));
+    $("test-submit").addEventListener("click", () => {
+      const cur = state.session[state.idx];
+      const user = $("test-answer").value;
+      const ok = isExact(user, cur);
+      if (ok) state.score++;
+      else state.wrong.push({ q: state.idx + 1, answer: cur, user });
+      if (state.idx < state.session.length - 1) { state.idx++; renderTest(); }
+      else { stopSpeak(); showResult(); }
+    });
+    $("test-quit").addEventListener("click", () => { if (confirm("시험을 끝낼까요? 결과는 저장되지 않아요.")) goToScreen("screen-setup"); });
+
+    /* ---------- 결과 ---------- */
+    function showResult() {
+      const total = state.session.length;
+      const pct = total ? Math.round((state.score / total) * 100) : 0;
+      $("result-pct").textContent = pct + "%";
+      $("score-ring").style.setProperty("--p", pct + "%");
+      $("result-summary").innerHTML = `${total}문장 중 <b>${state.score}문장</b> 정답! ` +
+        (pct === 100 ? "완벽해요! 🏆" : pct >= 70 ? "잘했어요! 👍" : "다시 한 번 도전해 봐요. 💪");
+      const wrongCard = $("wrong-card");
+      if (state.wrong.length === 0) {
+        wrongCard.style.display = "none";
+        confettiBurst(); confettiBurst();
+      } else {
+        wrongCard.style.display = "";
+        $("wrong-list").innerHTML = state.wrong.map((w) => `
+          <div class="wrong-item">
+            <div class="qn">${w.q}번 문장</div>
+            <div class="diff">${diffHtml(w.answer, w.user)}</div>
+            <div style="margin-top:8px"><span class="label" style="font-size:.78rem;color:var(--muted)">정답</span>
+              <div class="answer-text" style="font-size:1rem">${escapeHtml(w.answer)}</div></div>
+            <div style="margin-top:4px"><span class="label" style="font-size:.78rem;color:var(--muted)">내 답</span>
+              <div style="font-size:1rem;color:var(--muted)">${escapeHtml(w.user) || "<i>(빈칸)</i>"}</div></div>
+          </div>`).join("");
+      }
+      goToScreen("screen-result");
+    }
+    $("result-retry-wrong").addEventListener("click", () => {
+      if (state.wrong.length === 0) { alert("틀린 문장이 없어요! 🎉"); return; }
+      state.session = state.wrong.map((w) => w.answer);
+      startTest();
+    });
+    $("result-retry-all").addEventListener("click", () => { state.session = shuffle(state.session); startTest(); });
+    $("result-home").addEventListener("click", () => goToScreen("screen-upload"));
+
+    function confettiBurst() {
+      if (typeof confetti === "function") {
+        confetti({ particleCount: 80, spread: 70, origin: { y: 0.7 } });
+      }
+    }
+
+    /* ---------- 보관함(localStorage) ---------- */
+    const HKEY = "dm_history";
+    function getHistory() { try { return JSON.parse(localStorage.getItem(HKEY) || "[]"); } catch (e) { return []; } }
+    function saveHistory(list) { localStorage.setItem(HKEY, JSON.stringify(list.slice(0, 30))); }
+    function saveCurrentToHistory() {
+      if (!state.sentences.length) return;
+      const list = getHistory();
+      const title = state.sentences[0].slice(0, 18) + (state.sentences[0].length > 18 ? "…" : "");
+      list.unshift({
+        id: Date.now(),
+        title,
+        count: state.sentences.length,
+        date: new Date().toLocaleString("ko-KR", { dateStyle: "medium", timeStyle: "short" }),
+        sentences: state.sentences.slice(),
+      });
+      saveHistory(list);
+    }
+    $("btn-history").addEventListener("click", () => { renderHistory(); openModal("modal-history"); });
+    function renderHistory() {
+      const list = getHistory();
+      const el = $("history-list");
+      if (!list.length) { el.innerHTML = `<div class="empty">아직 저장된 받아쓰기가 없어요.</div>`; return; }
+      el.innerHTML = list.map((h) => `
+        <div class="hist-item" data-load="${h.id}">
+          <div>
+            <div style="font-weight:700">${escapeHtml(h.title)}</div>
+            <div class="meta">${escapeHtml(h.date)} · ${h.count}문장</div>
+          </div>
+          <button class="del" data-del="${h.id}">삭제</button>
+        </div>`).join("");
+      el.querySelectorAll(".hist-item[data-load]").forEach((it) =>
+        it.addEventListener("click", (e) => {
+          if (e.target.closest("[data-del]")) return;
+          const h = getHistory().find((x) => String(x.id) === it.dataset.load);
+          if (h) { state.sentences = h.sentences.slice(); renderSentenceEditor(); closeModal("modal-history"); goToScreen("screen-verify"); }
+        })
+      );
+      el.querySelectorAll("[data-del]").forEach((b) =>
+        b.addEventListener("click", () => { saveHistory(getHistory().filter((x) => String(x.id) !== b.dataset.del)); renderHistory(); })
+      );
+    }
+
+    /* ---------- 초기화 ---------- */
+    renderSpeedControls();
+    updateEngineFoot();
+  })();
+  </script>
+</body>
+</html>

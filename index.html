@@ -302,6 +302,11 @@
         </div>
         <div class="notice info" id="speed-note" style="display:none">✨ Gemini 고품질 음성은 속도 조절을 지원하지 않아요. 속도가 필요하면 ⚙️ 설정에서 애플 기본 음성으로 바꿔 주세요.</div>
         <div class="footnote" id="voice-foot" style="text-align:left;margin-top:6px"></div>
+        <div id="batch-wrap" style="display:none;margin-top:12px">
+          <button class="btn btn-ghost btn-block" id="btn-batch-tts">🎙️ 이 받아쓰기 음성 한 번에 만들기</button>
+          <div class="notice info" style="font-size:.8rem;margin-top:8px">무료 등급은 하루 1회만 호출돼서, <b>전체 문장을 한 번에 받아</b> 문장별로 잘라 영구 저장해요. 성공하면 이후엔 반복해도 추가 요청이 없어요.</div>
+          <div class="footnote" id="batch-info" style="text-align:left;margin-top:4px"></div>
+        </div>
       </div>
 
       <div class="card">
@@ -653,70 +658,184 @@
       for (let i = 0; i < len; i++) view.setUint8(44 + i, bin.charCodeAt(i) & 0xff);
       return new Blob([buf], { type: "audio/wav" });
     }
+    // Gemini TTS 1요청 → WAV Blob 반환 (실패 시 throw). 할당량/속도제한 정보는 에러 메시지에 보존.
+    async function geminiTTSRequest(text) {
+      const models = ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"];
+      let lastErr = "";
+      for (const model of models) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(state.geminiKey)}`;
+          const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: text }] }],
+              generationConfig: {
+                responseModalities: ["AUDIO"],
+                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: state.geminiVoice } } },
+              },
+            }),
+          });
+          if (!res.ok) {
+            const e = await res.json().catch(() => ({}));
+            lastErr = (e.error && e.error.message) || ("HTTP " + res.status);
+            // 할당량/속도제한이면 다른 모델도 동일 → 즉시 throw(실제 사유 보존)
+            if (res.status === 429 || /quota|RESOURCE_EXHAUSTED/i.test(lastErr)) throw new Error(lastErr);
+            continue;
+          }
+          const data = await res.json();
+          const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+          const audio = parts.find((p) => p.inlineData && p.inlineData.data);
+          if (!audio) { lastErr = "오디오 응답 없음"; continue; }
+          const mime = audio.inlineData.mimeType || "";
+          const rate = parseInt((mime.match(/rate=(\d+)/) || [])[1] || "24000", 10);
+          return pcmToWav(audio.inlineData.data, rate);
+        } catch (err) {
+          lastErr = err.message || String(err);
+          if (/quota|RESOURCE_EXHAUSTED|\b429\b/i.test(lastErr)) throw new Error(lastErr);
+        }
+      }
+      throw new Error(lastErr || "알 수 없는 오류");
+    }
+    // 실패 처리: 세션 동안 애플 음성으로 전환 + 한 번만 안내
+    function handleGeminiFail(lastErr) {
+      geminiBlocked = true;
+      const noFreeQuota = /limit:\s*0/i.test(lastErr);
+      const retrySec = (lastErr.match(/retry in ([\d.]+)s/i) || [])[1];
+      const isQuota = /quota|RESOURCE_EXHAUSTED|\b429\b|limit:/i.test(lastErr);
+      let msg;
+      if (isQuota && noFreeQuota) msg = "⚠️ Gemini 음성은 무료 등급 할당량이 0이에요(Google 결제 설정 필요). 애플(Yuna) 음성으로 읽어드릴게요.";
+      else if (isQuota) msg = "⚠️ 오늘 Gemini 음성 한도를 다 썼어요" + (retrySec ? ` (약 ${Math.ceil(parseFloat(retrySec))}초 후 회복)` : " (무료는 하루 1회)") + ". 애플(Yuna) 음성으로 읽어드릴게요.";
+      else msg = "Gemini 음성 생성에 실패해 애플(Yuna) 음성으로 읽어드릴게요. (" + (lastErr || "알 수 없는 오류") + ")";
+      showToast(msg, 7000);
+      renderSpeedControls();
+    }
     async function speakGemini(text) {
       const key = ttsCacheKey(text);
-      // L1: 메모리 캐시
-      if (geminiAudioCache.has(key)) { playAudioBlob(geminiAudioCache.get(key)); return; }
-      const models = ["gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts"];
+      if (geminiAudioCache.has(key)) { playAudioBlob(geminiAudioCache.get(key)); return; } // L1
       setListenBusy(true);
       try {
-        // L2: 영구 캐시(IndexedDB) — 새로고침·재방문에도 재생성 없음
-        const cachedBlob = await idbGet(key);
-        if (cachedBlob) { geminiAudioCache.set(key, cachedBlob); playAudioBlob(cachedBlob); return; }
-        let lastErr = "";
-        let quotaHit = false;
-        for (const model of models) {
-          try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(state.geminiKey)}`;
-            const res = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: text }] }],
-                generationConfig: {
-                  responseModalities: ["AUDIO"],
-                  speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: state.geminiVoice } } },
-                },
-              }),
-            });
-            if (!res.ok) {
-              const e = await res.json().catch(() => ({}));
-              lastErr = (e.error && e.error.message) || ("HTTP " + res.status);
-              // 할당량/속도제한이면 다른 모델도 동일하므로 즉시 중단 (flash의 실제 사유를 그대로 노출)
-              if (res.status === 429 || /quota|RESOURCE_EXHAUSTED/i.test(lastErr)) { quotaHit = true; break; }
-              continue;
-            }
-            const data = await res.json();
-            const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
-            const audio = parts.find((p) => p.inlineData && p.inlineData.data);
-            if (!audio) { lastErr = "오디오 응답 없음"; continue; }
-            const mime = audio.inlineData.mimeType || "";
-            const rate = parseInt((mime.match(/rate=(\d+)/) || [])[1] || "24000", 10);
-            const blob = pcmToWav(audio.inlineData.data, rate);
-            geminiAudioCache.set(key, blob);
-            idbPut(key, blob); // 영구 저장(비동기, 실패해도 무시)
-            playAudioBlob(blob);
-            return;
-          } catch (err) { lastErr = err.message || String(err); }
-        }
-        // 전부 실패 → 애플 음성으로 폴백 (오류 한 번만 안내)
-        geminiBlocked = true; // 이번 세션 동안은 더 시도하지 않고 애플 음성 사용 (문장마다 실패 반복 방지)
-        const noFreeQuota = /limit:\s*0/i.test(lastErr);          // 무료 등급 자체가 0 → 결제 필요
-        const retrySec = (lastErr.match(/retry in ([\d.]+)s/i) || [])[1]; // 분당 속도제한 → 잠시 후 회복
-        let msg;
-        if (quotaHit && noFreeQuota) {
-          msg = "⚠️ Gemini 음성은 무료 등급 할당량이 0이에요(Google 결제 설정 필요). 애플(Yuna) 음성으로 읽어드릴게요.";
-        } else if (quotaHit) {
-          msg = "⚠️ Gemini 음성 사용량 한도에 도달했어요" + (retrySec ? ` (약 ${Math.ceil(parseFloat(retrySec))}초 후 회복)` : "") + ". 애플(Yuna) 음성으로 읽어드릴게요.";
-        } else {
-          msg = "Gemini 음성 생성에 실패해 애플(Yuna) 음성으로 읽어드릴게요. (" + (lastErr || "알 수 없는 오류") + ")";
-        }
-        showToast(msg, 7000);
-        renderSpeedControls(); // 애플 음성 복귀에 맞춰 속도 UI 다시 표시
-        speakApple(text);
+        const cached = await idbGet(key); // L2 영구 캐시
+        if (cached) { geminiAudioCache.set(key, cached); playAudioBlob(cached); return; }
+        let blob;
+        try { blob = await geminiTTSRequest(text); }
+        catch (err) { handleGeminiFail(err.message || String(err)); speakApple(text); return; }
+        geminiAudioCache.set(key, blob);
+        idbPut(key, blob);
+        playAudioBlob(blob);
       } finally {
         setListenBusy(false);
       }
+    }
+
+    /* ---------- 배치 생성: 전체 문장 1요청 → 무음 분할 → 문장별 영구 저장 ---------- */
+    // Float32 샘플 → 16bit WAV Blob
+    function floatToWav(samples, sampleRate) {
+      const len = samples.length;
+      const buf = new ArrayBuffer(44 + len * 2);
+      const view = new DataView(buf);
+      const wstr = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+      wstr(0, "RIFF"); view.setUint32(4, 36 + len * 2, true); wstr(8, "WAVE");
+      wstr(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+      wstr(36, "data"); view.setUint32(40, len * 2, true);
+      let off = 44;
+      for (let i = 0; i < len; i++) { let s = Math.max(-1, Math.min(1, samples[i])); view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true); off += 2; }
+      return new Blob([buf], { type: "audio/wav" });
+    }
+    // 통짜 WAV → N조각. "가장 큰 무음 골짜기 N-1곳"만 잘라 정확히 N개로 분할.
+    async function splitAudioBySilence(wavBlob, n) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      const ac = new AC();
+      let audioBuf;
+      try { audioBuf = await ac.decodeAudioData(await wavBlob.arrayBuffer()); }
+      catch (e) { try { ac.close(); } catch (x) {} return null; }
+      const data = audioBuf.getChannelData(0);
+      const sr = audioBuf.sampleRate;
+      try { ac.close(); } catch (x) {}
+      // 20ms 창 RMS
+      const win = Math.max(1, Math.floor(sr * 0.02));
+      const rms = [];
+      for (let i = 0; i < data.length; i += win) {
+        let s = 0, c = 0;
+        for (let j = i; j < Math.min(i + win, data.length); j++) { s += data[j] * data[j]; c++; }
+        rms.push(Math.sqrt(s / Math.max(1, c)));
+      }
+      let peak = 0; for (const v of rms) if (v > peak) peak = v;
+      const thr = Math.max(0.006, peak * 0.06);          // 무음 임계값(피크 상대)
+      const minGapWin = Math.ceil(0.12 / 0.02);          // 최소 120ms 이상만 "골짜기"로 인정
+      // 무음 구간(run) 수집
+      const gaps = [];
+      let runStart = -1;
+      for (let i = 0; i < rms.length; i++) {
+        if (rms[i] < thr) { if (runStart < 0) runStart = i; }
+        else { if (runStart >= 0) { const L = i - runStart; if (L >= minGapWin) gaps.push({ s: runStart, e: i, len: L }); runStart = -1; } }
+      }
+      if (runStart >= 0) { const L = rms.length - runStart; if (L >= minGapWin) gaps.push({ s: runStart, e: rms.length, len: L }); }
+      // 내부 골짜기만 (앞/뒤 침묵 제외)
+      const internal = gaps.filter((g) => g.s > 0 && g.e < rms.length);
+      if (internal.length < n - 1) return null;          // 골짜기가 부족 → 분할 불가(안전 중단)
+      // 가장 긴 N-1곳 선택 → 위치순 정렬 → 골짜기 중앙을 자르는 지점으로
+      const cuts = internal.slice().sort((a, b) => b.len - a.len).slice(0, n - 1)
+        .sort((a, b) => a.s - b.s).map((g) => Math.floor(((g.s + g.e) / 2) * win));
+      const bounds = [0, ...cuts, data.length];
+      const segs = [];
+      for (let k = 0; k < n; k++) {
+        let ws = Math.floor(bounds[k] / win), we = Math.floor(bounds[k + 1] / win);
+        while (ws < we && rms[ws] < thr) ws++;            // 앞쪽 침묵 다듬기
+        while (we > ws && rms[we - 1] < thr) we--;        // 뒤쪽 침묵 다듬기
+        const a = ws * win, b = Math.min(data.length, we * win);
+        if (b - a < sr * 0.12) return null;               // 너무 짧은 조각 → 분할 신뢰 불가(안전 중단)
+        segs.push(data.subarray(a, b));
+      }
+      return { segs, sr };
+    }
+    let batchBusy = false;
+    function setBatchBusy(b) {
+      batchBusy = b;
+      const btn = $("btn-batch-tts");
+      if (btn) { btn.disabled = b; btn.textContent = b ? "⏳ 만드는 중… (10~20초)" : "🎙️ 이 받아쓰기 음성 한 번에 만들기"; }
+    }
+    async function batchPrepareGemini() {
+      if (batchBusy) return;
+      const sentences = state.sentences.map((s) => s.trim()).filter(Boolean);
+      if (sentences.length < 2) { showToast("문장이 2개 이상일 때 한 번에 만들 수 있어요.", 4000); return; }
+      if (!state.geminiKey) { showToast("먼저 ⚙️ 설정에서 Gemini 키를 저장해 주세요.", 4000); return; }
+      setBatchBusy(true);
+      try {
+        // 문장 사이를 길게 쉬도록 줄바꿈으로 결합 (문장 끝 마침표/물음표가 자연스러운 쉼을 만듦)
+        const combined = sentences.join("\n\n");
+        let wav;
+        try { wav = await geminiTTSRequest(combined); }
+        catch (err) { handleGeminiFail(err.message || String(err)); return; }
+        const result = await splitAudioBySilence(wav, sentences.length);
+        if (!result || result.segs.length !== sentences.length) {
+          showToast("⚠️ 문장 사이 간격이 불분명해 자동 분할에 실패했어요. 오늘은 애플(Yuna) 음성으로 학습해 주세요. (내일 다시 시도 가능)", 8000);
+          return;
+        }
+        for (let i = 0; i < sentences.length; i++) {
+          const blob = floatToWav(result.segs[i], result.sr);
+          const key = ttsCacheKey(sentences[i]);
+          geminiAudioCache.set(key, blob);
+          await idbPut(key, blob);
+        }
+        showToast(`✅ ${sentences.length}개 문장 음성을 만들어 기기에 저장했어요! 이제 반복·재방문해도 추가 요청이 없어요.`, 7000);
+        updateBatchInfo();
+      } finally {
+        setBatchBusy(false);
+      }
+    }
+    // 현재 문장 중 몇 개가 이미 캐시됐는지 표시
+    async function updateBatchInfo() {
+      const el = $("batch-info");
+      if (!el) return;
+      const sentences = state.sentences.map((s) => s.trim()).filter(Boolean);
+      if (!sentences.length) { el.textContent = ""; return; }
+      let have = 0;
+      for (const s of sentences) { if (await idbGet(ttsCacheKey(s))) have++; }
+      el.textContent = `저장됨 ${have}/${sentences.length} 문장` + (have === sentences.length ? " · 추가 요청 없이 재생돼요 ✅" : "");
     }
     function setRate(r) {
       state.ttsRate = Math.min(1.5, Math.max(0.5, r));
@@ -731,6 +850,12 @@
         vf.textContent = gemini
           ? `🔊 음성: Gemini 고품질(${state.geminiVoice}) · 속도 조절 미지원`
           : "🔊 음성: 애플 기본(Yuna) · 속도 조절 가능";
+      }
+      // 배치 생성 버튼: Gemini 엔진 + 키가 있으면 노출(차단 상태여도 내일 재시도용으로 표시)
+      const showBatch = state.voiceEngine === "gemini" && !!state.geminiKey;
+      if ($("batch-wrap")) {
+        $("batch-wrap").style.display = showBatch ? "" : "none";
+        if (showBatch) updateBatchInfo();
       }
       // Gemini 모드: 속도 UI 숨김
       if ($("speed-field")) $("speed-field").style.display = gemini ? "none" : "";
@@ -1050,8 +1175,10 @@
       state.sentences = clean;
       saveCurrentToHistory();
       setupCountOptions();
+      renderSpeedControls(); // 배치 버튼/속도 UI 갱신
       goToScreen("screen-setup");
     });
+    $("btn-batch-tts").addEventListener("click", batchPrepareGemini);
 
     /* ---------- 설정 화면 ---------- */
     function setupCountOptions() {

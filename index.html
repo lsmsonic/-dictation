@@ -415,8 +415,17 @@
       <div class="field" style="margin-top:10px">
         <label class="voice-opt" style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:pointer;margin-bottom:8px">
           <input type="radio" name="voice-engine" value="apple" style="width:auto;margin-top:3px" />
-          <span><b>🍎 애플 기본 음성 (Yuna)</b><br /><span style="font-size:.82rem;color:var(--muted)">기기 내장 고품질 음성 · <b>속도 조절 가능</b> · 무료 · 권장</span></span>
+          <span><b>🍎 애플 기본 음성 (Yuna)</b><br /><span style="font-size:.82rem;color:var(--muted)">기기 내장 고품질 음성 · <b>속도 조절 가능</b> · 무료 · 오프라인</span></span>
         </label>
+        <label class="voice-opt" style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:pointer;margin-bottom:8px">
+          <input type="radio" name="voice-engine" value="clova" style="width:auto;margin-top:3px" />
+          <span><b>🟢 클로바 음성 (네이버, 권장)</b><br /><span style="font-size:.82rem;color:var(--muted)">한국어 전용 고품질 · <b>속도 조절 가능</b> · 키는 서버에 설정(입력 불필요) · 한 번 들은 문장은 영구 저장</span></span>
+        </label>
+        <div id="clova-voice-wrap" style="margin:0 0 8px;display:none">
+          <label for="clova-voice-select" style="font-size:.85rem">클로바 화자 선택</label>
+          <select id="clova-voice-select"></select>
+          <button class="btn btn-ghost" id="btn-test-clova" style="margin-top:8px">🔈 이 음성 들어보기</button>
+        </div>
         <label class="voice-opt" style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:pointer">
           <input type="radio" name="voice-engine" value="gemini" style="width:auto;margin-top:3px" />
           <span><b>✨ Gemini 고품질 음성</b><br /><span style="font-size:.82rem;color:var(--muted)">더 자연스러운 음성 · <b>키 필요</b> · 들을 때마다 과금·약간의 지연 · <b>속도 조절 미지원</b></span></span>
@@ -473,13 +482,28 @@
       wrong: [],         // {q, answer, user}
       ttsRate: parseFloat(localStorage.getItem("dm_tts_rate") || "0.9"),
       geminiKey: localStorage.getItem("dm_gemini_key") || "",
-      voiceEngine: localStorage.getItem("dm_voice_engine") || "apple", // 'apple' | 'gemini'
+      voiceEngine: localStorage.getItem("dm_voice_engine") || "apple", // 'apple' | 'clova' | 'gemini'
       geminiVoice: localStorage.getItem("dm_gemini_voice") || "Kore",
+      clovaVoice: localStorage.getItem("dm_clova_voice") || "nara",
     };
     const GEMINI_VOICES = ["Kore", "Aoede", "Leda", "Callirrhoe", "Puck", "Charon", "Fenrir"];
+    // CLOVA 한국어 화자 (라벨)
+    const CLOVA_VOICES = [
+      { id: "nara", label: "나라 (여, 표준)" },
+      { id: "vara", label: "아라 (여, 차분)" },
+      { id: "vyuna", label: "유나 (여)" },
+      { id: "vmikyung", label: "미경 (여)" },
+      { id: "nyejin", label: "예진 (여)" },
+      { id: "vdain", label: "다인 (아동)" },
+      { id: "ndain", label: "다인 (아동2)" },
+      { id: "jinho", label: "진호 (남)" },
+      { id: "nhajun", label: "하준 (아동, 남)" },
+      { id: "ndaeseong", label: "대성 (남)" },
+    ];
     const geminiAudioCache = new Map(); // L1: 메모리 캐시 (key -> Blob)
     let currentAudio = null;
     let geminiBlocked = false; // 이번 세션에서 Gemini TTS가 막혔으면(할당량/결제) 애플 음성으로 자동 전환
+    let clovaBlocked = false;  // 이번 세션에서 CLOVA TTS가 막혔으면(키 미설정/오류) 애플 음성으로 자동 전환
 
     /* ---------- 토스트 ---------- */
     let _toastTimer = null;
@@ -557,8 +581,14 @@
         } catch (e) { resolve(); }
       });
     }
-    // 캐시 키: 음성(voice)이 다르면 다른 오디오이므로 voice를 포함
-    function ttsCacheKey(text) { return state.geminiVoice + "::" + text; }
+    // 캐시 키: 엔진/음성이 다르면 다른 오디오 → 키에 포함
+    function ttsCacheKey(text) { return "gemini::" + state.geminiVoice + "::" + text; }
+    // CLOVA는 speed가 오디오에 반영되므로 키에 속도까지 포함
+    function rateToClovaSpeed() {
+      // 앱 속도 0.5~1.5 → CLOVA speed (양수=느리게, 음수=빠르게). 1.0=0
+      return Math.min(10, Math.max(-5, Math.round((1.0 - state.ttsRate) * 10)));
+    }
+    function clovaCacheKey(text) { return "clova::" + state.clovaVoice + "::" + rateToClovaSpeed() + "::" + text; }
 
     /* ---------- 화면 전환 ---------- */
     function goToScreen(id) {
@@ -602,12 +632,10 @@
     // 엔진 분기 진입점
     function speak(text) {
       stopSpeak();
-      // Gemini 엔진 + 키 있음 + 이번 세션에 막히지 않았을 때만 Gemini 사용
-      if (state.voiceEngine === "gemini" && state.geminiKey && !geminiBlocked) {
-        speakGemini(text);
-      } else {
-        speakApple(text);
-      }
+      const eng = state.voiceEngine;
+      if (eng === "clova" && !clovaBlocked) speakClova(text);
+      else if (eng === "gemini" && state.geminiKey && !geminiBlocked) speakGemini(text);
+      else speakApple(text);
     }
     function speakApple(text) {
       if (!("speechSynthesis" in window)) {
@@ -728,6 +756,46 @@
       }
     }
 
+    /* ---------- CLOVA Voice (서버 프록시 /api/tts) ---------- */
+    async function speakClova(text) {
+      const key = clovaCacheKey(text);
+      if (geminiAudioCache.has(key)) { playAudioBlob(geminiAudioCache.get(key)); return; } // L1
+      setListenBusy(true);
+      try {
+        const cached = await idbGet(key); // L2 영구 캐시
+        if (cached) { geminiAudioCache.set(key, cached); playAudioBlob(cached); return; }
+        let res;
+        try {
+          res = await fetch("/api/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text, speaker: state.clovaVoice, speed: rateToClovaSpeed(), format: "mp3" }),
+          });
+        } catch (e) { handleClovaFail("network"); speakApple(text); return; }
+        if (!res.ok) {
+          let info = "";
+          try { info = (await res.json()).error || ""; } catch (e) {}
+          handleClovaFail(res.status === 503 ? "not_configured" : (info || ("HTTP " + res.status)));
+          speakApple(text);
+          return;
+        }
+        const blob = await res.blob();
+        geminiAudioCache.set(key, blob);
+        idbPut(key, blob);
+        playAudioBlob(blob);
+      } finally {
+        setListenBusy(false);
+      }
+    }
+    function handleClovaFail(reason) {
+      clovaBlocked = true;
+      const msg = reason === "not_configured"
+        ? "ℹ️ 클로바 음성이 아직 연결되지 않았어요(서버에 키 미설정). 애플(Yuna) 음성으로 읽어드릴게요."
+        : "클로바 음성 생성에 실패해 애플(Yuna) 음성으로 읽어드릴게요. (" + reason + ")";
+      showToast(msg, 6000);
+      renderSpeedControls();
+    }
+
     /* ---------- 배치 생성: 전체 문장 1요청 → 무음 분할 → 문장별 영구 저장 ---------- */
     // Float32 샘플 → 16bit WAV Blob
     function floatToWav(samples, sampleRate) {
@@ -843,13 +911,18 @@
       renderSpeedControls();
     }
     function renderSpeedControls() {
-      const gemini = state.voiceEngine === "gemini" && state.geminiKey && !geminiBlocked;
+      const usingGemini = state.voiceEngine === "gemini" && state.geminiKey && !geminiBlocked;
+      const usingClova = state.voiceEngine === "clova" && !clovaBlocked;
+      const speedHidden = usingGemini; // Gemini만 속도 조절 불가. 애플·CLOVA는 속도 지원
       // 엔진 안내 문구
       const vf = $("voice-foot");
       if (vf) {
-        vf.textContent = gemini
+        const clovaLabel = (CLOVA_VOICES.find((v) => v.id === state.clovaVoice) || {}).label || state.clovaVoice;
+        vf.textContent = usingGemini
           ? `🔊 음성: Gemini 고품질(${state.geminiVoice}) · 속도 조절 미지원`
-          : "🔊 음성: 애플 기본(Yuna) · 속도 조절 가능";
+          : usingClova
+            ? `🔊 음성: 클로바(${clovaLabel}) · 속도 조절 가능`
+            : "🔊 음성: 애플 기본(Yuna) · 속도 조절 가능";
       }
       // 배치 생성 버튼: Gemini 엔진 + 키가 있으면 노출(차단 상태여도 내일 재시도용으로 표시)
       const showBatch = state.voiceEngine === "gemini" && !!state.geminiKey;
@@ -858,9 +931,9 @@
         if (showBatch) updateBatchInfo();
       }
       // Gemini 모드: 속도 UI 숨김
-      if ($("speed-field")) $("speed-field").style.display = gemini ? "none" : "";
-      if ($("speed-note")) $("speed-note").style.display = gemini ? "" : "none";
-      if (gemini) {
+      if ($("speed-field")) $("speed-field").style.display = speedHidden ? "none" : "";
+      if ($("speed-note")) $("speed-note").style.display = speedHidden ? "" : "none";
+      if (speedHidden) {
         $("study-speed").innerHTML = "";
         $("test-speed").innerHTML = "";
         return;
@@ -911,6 +984,13 @@
       sel.value = state.geminiVoice;
       $("gemini-voice-wrap").style.display = state.voiceEngine === "gemini" ? "" : "none";
       if (state.voiceEngine === "gemini") updateCacheInfo();
+      // CLOVA 화자 select
+      const csel = $("clova-voice-select");
+      if (!csel.options.length) {
+        csel.innerHTML = CLOVA_VOICES.map((v) => `<option value="${v.id}">${escapeHtml(v.label)}</option>`).join("");
+      }
+      csel.value = state.clovaVoice;
+      $("clova-voice-wrap").style.display = state.voiceEngine === "clova" ? "" : "none";
     }
     async function updateCacheInfo() {
       const el = $("tts-cache-info");
@@ -930,6 +1010,8 @@
       r.addEventListener("change", () => {
         state.voiceEngine = r.value;
         localStorage.setItem("dm_voice_engine", r.value);
+        if (r.value === "clova") clovaBlocked = false; // 엔진 바꾸면 차단 해제하고 재시도 가능
+        if (r.value === "gemini") geminiBlocked = false;
         if (r.value === "gemini" && !state.geminiKey) {
           alert("Gemini 음성을 쓰려면 위에 본인 Gemini API 키를 먼저 저장해 주세요. 키가 없으면 자동으로 애플 음성으로 읽어드려요.");
         }
@@ -942,7 +1024,13 @@
       localStorage.setItem("dm_gemini_voice", e.target.value);
       renderSpeedControls();
     });
+    $("clova-voice-select").addEventListener("change", (e) => {
+      state.clovaVoice = e.target.value;
+      localStorage.setItem("dm_clova_voice", e.target.value);
+      renderSpeedControls();
+    });
     $("btn-test-voice").addEventListener("click", () => speak("오늘은 하늘이 참 맑고 푸르다."));
+    $("btn-test-clova").addEventListener("click", () => { clovaBlocked = false; speak("오늘은 하늘이 참 맑고 푸르다."); });
     function renderKeyStatus() {
       $("key-status").innerHTML = state.geminiKey
         ? `<div class="notice ok">✅ 키가 저장되어 있어요. 고정밀(Gemini) 인식을 사용합니다.</div>`

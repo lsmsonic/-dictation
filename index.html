@@ -216,7 +216,7 @@
     .empty { text-align: center; color: var(--muted); padding: 20px; font-size: .9rem; }
     .footnote { text-align: center; font-size: .75rem; color: var(--muted); margin-top: 8px; }
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-    .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px); max-width: 90%; width: max-content; background: #20243a; color: #fff; padding: 13px 18px; border-radius: 14px; font-size: .9rem; line-height: 1.5; box-shadow: 0 10px 30px rgba(0,0,0,.28); opacity: 0; pointer-events: none; transition: .25s; z-index: 100; text-align: center; }
+    .toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px); max-width: 90%; width: max-content; background: #20243a; color: #fff; padding: 13px 18px; border-radius: 14px; font-size: .9rem; line-height: 1.5; box-shadow: 0 10px 30px rgba(0,0,0,.28); opacity: 0; pointer-events: none; transition: .25s; z-index: 100; text-align: center; white-space: pre-line; word-break: break-word; }
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   </style>
 </head>
@@ -790,9 +790,12 @@
           });
         } catch (e) { handleClovaFail("network"); speakApple(text); return; }
         if (!res.ok) {
-          let info = "";
-          try { info = (await res.json()).error || ""; } catch (e) {}
-          handleClovaFail(res.status === 401 ? "no_key" : (info || ("HTTP " + res.status)));
+          let j = {};
+          try { j = await res.json(); } catch (e) {}
+          if (res.status === 401) { handleClovaFail("no_key"); speakApple(text); return; }
+          // CLOVA(업스트림) 실제 응답을 그대로 노출 → 원인 진단
+          const detail = `${j.status || res.status}${j.detail ? " " + String(j.detail).slice(0, 180) : (j.error ? " " + j.error : "")}`;
+          handleClovaFail("upstream:" + detail);
           speakApple(text);
           return;
         }
@@ -806,12 +809,17 @@
     }
     function handleClovaFail(reason) {
       clovaBlocked = true;
-      const msg = reason === "no_key"
-        ? "ℹ️ 클로바 음성을 쓰려면 ⚙️ 설정에서 클로바 Client ID/Secret을 입력해 주세요. 지금은 애플(Yuna) 음성으로 읽어드릴게요."
-        : reason === "tts_failed"
-          ? "클로바 키가 올바른지 확인해 주세요(인증 실패 가능). 애플(Yuna) 음성으로 읽어드릴게요."
-          : "클로바 음성 생성에 실패해 애플(Yuna) 음성으로 읽어드릴게요. (" + reason + ")";
-      showToast(msg, 6000);
+      let msg;
+      if (reason === "no_key") {
+        msg = "ℹ️ 클로바 음성을 쓰려면 ⚙️ 설정에서 클로바 Client ID/Secret을 입력해 주세요. 지금은 애플(Yuna) 음성으로 읽어드릴게요.";
+      } else if (reason === "network") {
+        msg = "네트워크 오류로 클로바 호출에 실패했어요. 애플(Yuna) 음성으로 읽어드릴게요.";
+      } else if (reason.indexOf("upstream:") === 0) {
+        msg = "클로바 응답 오류 → " + reason.slice(9) + "\n(애플 음성으로 읽어드릴게요)";
+      } else {
+        msg = "클로바 음성 생성에 실패했어요. 애플(Yuna) 음성으로 읽어드릴게요. (" + reason + ")";
+      }
+      showToast(msg, 10000);
       renderSpeedControls();
     }
 

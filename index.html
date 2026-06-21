@@ -419,10 +419,20 @@
         </label>
         <label class="voice-opt" style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:pointer;margin-bottom:8px">
           <input type="radio" name="voice-engine" value="clova" style="width:auto;margin-top:3px" />
-          <span><b>🟢 클로바 음성 (네이버, 권장)</b><br /><span style="font-size:.82rem;color:var(--muted)">한국어 전용 고품질 · <b>속도 조절 가능</b> · 키는 서버에 설정(입력 불필요) · 한 번 들은 문장은 영구 저장</span></span>
+          <span><b>🟢 클로바 음성 (네이버, 권장)</b><br /><span style="font-size:.82rem;color:var(--muted)">한국어 전용 고품질 · <b>속도 조절 가능</b> · <b>키 입력 필요</b>(아래) · 한 번 들은 문장은 영구 저장</span></span>
         </label>
         <div id="clova-voice-wrap" style="margin:0 0 8px;display:none">
-          <label for="clova-voice-select" style="font-size:.85rem">클로바 화자 선택</label>
+          <label for="clova-keyid-input" style="font-size:.85rem">클로바 Client ID</label>
+          <input type="password" id="clova-keyid-input" placeholder="X-NCP-APIGW-API-KEY-ID" autocomplete="off" />
+          <label for="clova-key-input" style="font-size:.85rem;margin-top:8px;display:block">클로바 Client Secret</label>
+          <input type="password" id="clova-key-input" placeholder="X-NCP-APIGW-API-KEY" autocomplete="off" />
+          <div class="row" style="margin-top:10px">
+            <button class="btn btn-primary grow" id="clova-key-save">키 저장</button>
+            <button class="btn btn-line" id="clova-key-delete">키 삭제</button>
+          </div>
+          <div id="clova-key-status"></div>
+          <div class="notice info" style="font-size:.8rem;margin-top:10px">🔒 키는 <b>이 기기에만</b> 저장되고, 음성 생성 요청 때만 우리 서버를 거쳐 네이버로 전달돼요. <b>코드·배포물·서버에는 키가 저장되지 않습니다.</b></div>
+          <label for="clova-voice-select" style="font-size:.85rem;margin-top:12px;display:block">클로바 화자 선택</label>
           <select id="clova-voice-select"></select>
           <button class="btn btn-ghost" id="btn-test-clova" style="margin-top:8px">🔈 이 음성 들어보기</button>
         </div>
@@ -485,6 +495,8 @@
       voiceEngine: localStorage.getItem("dm_voice_engine") || "apple", // 'apple' | 'clova' | 'gemini'
       geminiVoice: localStorage.getItem("dm_gemini_voice") || "Kore",
       clovaVoice: localStorage.getItem("dm_clova_voice") || "nara",
+      clovaKeyId: localStorage.getItem("dm_clova_key_id") || "",
+      clovaKey: localStorage.getItem("dm_clova_key") || "",
     };
     const GEMINI_VOICES = ["Kore", "Aoede", "Leda", "Callirrhoe", "Puck", "Charon", "Fenrir"];
     // CLOVA 한국어 화자 (라벨)
@@ -758,6 +770,8 @@
 
     /* ---------- CLOVA Voice (서버 프록시 /api/tts) ---------- */
     async function speakClova(text) {
+      // 키 미입력이면 호출하지 않고 안내 + 애플 폴백
+      if (!state.clovaKeyId || !state.clovaKey) { handleClovaFail("no_key"); speakApple(text); return; }
       const key = clovaCacheKey(text);
       if (geminiAudioCache.has(key)) { playAudioBlob(geminiAudioCache.get(key)); return; } // L1
       setListenBusy(true);
@@ -769,13 +783,16 @@
           res = await fetch("/api/tts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text, speaker: state.clovaVoice, speed: rateToClovaSpeed(), format: "mp3" }),
+            body: JSON.stringify({
+              text, speaker: state.clovaVoice, speed: rateToClovaSpeed(), format: "mp3",
+              keyId: state.clovaKeyId, key: state.clovaKey, // 사용자가 설정에 입력한 키(요청 시에만 전달)
+            }),
           });
         } catch (e) { handleClovaFail("network"); speakApple(text); return; }
         if (!res.ok) {
           let info = "";
           try { info = (await res.json()).error || ""; } catch (e) {}
-          handleClovaFail(res.status === 503 ? "not_configured" : (info || ("HTTP " + res.status)));
+          handleClovaFail(res.status === 401 ? "no_key" : (info || ("HTTP " + res.status)));
           speakApple(text);
           return;
         }
@@ -789,9 +806,11 @@
     }
     function handleClovaFail(reason) {
       clovaBlocked = true;
-      const msg = reason === "not_configured"
-        ? "ℹ️ 클로바 음성이 아직 연결되지 않았어요(서버에 키 미설정). 애플(Yuna) 음성으로 읽어드릴게요."
-        : "클로바 음성 생성에 실패해 애플(Yuna) 음성으로 읽어드릴게요. (" + reason + ")";
+      const msg = reason === "no_key"
+        ? "ℹ️ 클로바 음성을 쓰려면 ⚙️ 설정에서 클로바 Client ID/Secret을 입력해 주세요. 지금은 애플(Yuna) 음성으로 읽어드릴게요."
+        : reason === "tts_failed"
+          ? "클로바 키가 올바른지 확인해 주세요(인증 실패 가능). 애플(Yuna) 음성으로 읽어드릴게요."
+          : "클로바 음성 생성에 실패해 애플(Yuna) 음성으로 읽어드릴게요. (" + reason + ")";
       showToast(msg, 6000);
       renderSpeedControls();
     }
@@ -991,6 +1010,18 @@
       }
       csel.value = state.clovaVoice;
       $("clova-voice-wrap").style.display = state.voiceEngine === "clova" ? "" : "none";
+      if (state.voiceEngine === "clova") {
+        $("clova-keyid-input").value = state.clovaKeyId;
+        $("clova-key-input").value = state.clovaKey;
+        renderClovaKeyStatus();
+      }
+    }
+    function renderClovaKeyStatus() {
+      const el = $("clova-key-status");
+      if (!el) return;
+      el.innerHTML = (state.clovaKeyId && state.clovaKey)
+        ? `<div class="notice ok" style="margin-top:10px;font-size:.82rem">✅ 클로바 키가 저장돼 있어요.</div>`
+        : `<div class="notice info" style="margin-top:10px;font-size:.82rem">키 미입력 — 입력 전까지는 애플 음성으로 동작해요.</div>`;
     }
     async function updateCacheInfo() {
       const el = $("tts-cache-info");
@@ -1015,6 +1046,9 @@
         if (r.value === "gemini" && !state.geminiKey) {
           alert("Gemini 음성을 쓰려면 위에 본인 Gemini API 키를 먼저 저장해 주세요. 키가 없으면 자동으로 애플 음성으로 읽어드려요.");
         }
+        if (r.value === "clova" && (!state.clovaKeyId || !state.clovaKey)) {
+          alert("클로바 음성을 쓰려면 아래에 클로바 Client ID와 Client Secret을 입력·저장해 주세요. 입력 전까지는 애플 음성으로 읽어드려요.");
+        }
         renderVoiceEngineUI();
         renderSpeedControls();
       })
@@ -1028,6 +1062,22 @@
       state.clovaVoice = e.target.value;
       localStorage.setItem("dm_clova_voice", e.target.value);
       renderSpeedControls();
+    });
+    $("clova-key-save").addEventListener("click", () => {
+      state.clovaKeyId = $("clova-keyid-input").value.trim();
+      state.clovaKey = $("clova-key-input").value.trim();
+      if (state.clovaKeyId) localStorage.setItem("dm_clova_key_id", state.clovaKeyId); else localStorage.removeItem("dm_clova_key_id");
+      if (state.clovaKey) localStorage.setItem("dm_clova_key", state.clovaKey); else localStorage.removeItem("dm_clova_key");
+      clovaBlocked = false; // 키 저장 후 재시도 가능
+      renderClovaKeyStatus();
+      renderSpeedControls();
+      showToast(state.clovaKeyId && state.clovaKey ? "클로바 키를 저장했어요. 👍" : "키를 모두 입력해 주세요.", 3500);
+    });
+    $("clova-key-delete").addEventListener("click", () => {
+      state.clovaKeyId = ""; state.clovaKey = "";
+      localStorage.removeItem("dm_clova_key_id"); localStorage.removeItem("dm_clova_key");
+      $("clova-keyid-input").value = ""; $("clova-key-input").value = "";
+      renderClovaKeyStatus();
     });
     $("btn-test-voice").addEventListener("click", () => speak("오늘은 하늘이 참 맑고 푸르다."));
     $("btn-test-clova").addEventListener("click", () => { clovaBlocked = false; speak("오늘은 하늘이 참 맑고 푸르다."); });

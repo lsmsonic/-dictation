@@ -11,12 +11,11 @@
 - 레퍼런스: 영어 단어 학습 앱 https://voca-study-mu.vercel.app/ (lsmsonic/voca-study)
 - 환경: GitHub(lsmsonic/-dictation) + Vercel
 
-## 환경변수 (CLOVA 음성)
-네이버 클라우드 CLOVA Voice를 쓰려면 Vercel 프로젝트에 아래 env를 설정하고 재배포한다. (없으면 앱은 애플 음성으로 동작)
-- `NCP_CLOVA_VOICE_KEY_ID` = CLOVA Voice 앱의 **Client ID** (`X-NCP-APIGW-API-KEY-ID`)
-- `NCP_CLOVA_VOICE_KEY` = CLOVA Voice 앱의 **Client Secret** (`X-NCP-APIGW-API-KEY`)
+## CLOVA 음성 키 (사용자 입력 방식)
+CLOVA Voice 키는 **앱 설정(⚙️)에서 사용자가 직접 입력**한다(Client ID/Secret). 키는 그 기기 localStorage에만 저장되고, 음성 생성 요청 때만 서버 함수 `api/tts.mjs`(CORS 우회 프록시)를 거쳐 네이버로 전달된다. **코드·배포물·서버 env에는 키를 두지 않는다.**
 
-서버 함수 `api/tts.mjs`가 이 키로 CLOVA를 호출(프록시)하며, 키는 브라우저에 노출되지 않는다.
+- 키 미입력 시 앱은 애플(Yuna) 음성으로 동작.
+- (선택) 운영자가 공용으로 쓰고 싶으면 Vercel env `NCP_CLOVA_VOICE_KEY_ID` / `NCP_CLOVA_VOICE_KEY` 를 폴백으로 둘 수도 있으나, 기본 설계는 사용자 입력이다.
 
 ## 문서
 - [개발 계획 초안](docs/개발계획-초안.md)

@@ -43,17 +43,20 @@ export default async function handler(req, res) {
     return;
   }
 
-  const keyId = process.env.NCP_CLOVA_VOICE_KEY_ID;
-  const key = process.env.NCP_CLOVA_VOICE_KEY;
-  if (!keyId || !key) {
-    res.status(503).json({ error: "not_configured" }); // 키 미설정 → 클라이언트가 애플 음성으로 폴백
-    return;
-  }
-
   // body 파싱 (Vercel은 application/json 자동 파싱)
   let body = req.body;
   if (typeof body === "string") { try { body = JSON.parse(body); } catch (e) { body = {}; } }
   body = body || {};
+
+  // 키는 클라이언트(설정에서 사용자 입력)가 요청 본문으로 전달 → 배포물/코드/서버 env에 키를 두지 않음.
+  // (CORS 때문에 프록시는 필요하지만, 키는 호출 시에만 거쳐갈 뿐 서버에 저장/로깅하지 않음)
+  // env는 선택적 폴백으로만 인정.
+  const keyId = (body.keyId && String(body.keyId).trim()) || process.env.NCP_CLOVA_VOICE_KEY_ID || "";
+  const key = (body.key && String(body.key).trim()) || process.env.NCP_CLOVA_VOICE_KEY || "";
+  if (!keyId || !key) {
+    res.status(401).json({ error: "no_key" }); // 키 없음 → 클라이언트가 설정 안내 + 애플 폴백
+    return;
+  }
 
   const text = String(body.text == null ? "" : body.text);
   if (!text.trim()) { res.status(400).json({ error: "text_required" }); return; }
